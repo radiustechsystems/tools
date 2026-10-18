@@ -221,8 +221,6 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   `Authorization` or `Cookie` on another origin; `onPaid` gets the receipt from the redirect's `PAYMENT-RESPONSE`, and the final response
   carries that header. In browsers `redirect: 'manual'` yields an opaque response (status 0), which cannot
   be followed.
-- A sponsored raw approve (`erc20ApprovalGasSponsoring`) is gated like the on-chain one
-  (`permit2Approval`, `onApprovalRequired`); EIP-2612 permits are part of the payment and are not.
 - Permit2 approval handled either way: when the server's facilitator sponsors it
   (`eip2612GasSponsoring`), a wallet holding only SBC pays without any on-chain transaction; when
   it does not, the SDK sends one unlimited approval from the signer (`permit2Approval: 'auto'`,
@@ -231,6 +229,8 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   can veto it (`declined`, carrying the request). Gas for that one transaction comes from SBC via
   the Turnstile on Radius, so keep ~0.01 SBC spare; elsewhere it is the chain's native token (ETH
   on Base).
+- A sponsored raw approve (`erc20ApprovalGasSponsoring`) is gated like the on-chain one
+  (`permit2Approval`, `onApprovalRequired`); EIP-2612 permits are part of the payment and are not.
 - `maxPerRequest` is a per-request ceiling, **not** a cumulative budget. An agent that loops can
   exceed any total unless you enforce one around it.
 - Wallet helpers on the same object, for the first network (`payFetch.on(network)` for the

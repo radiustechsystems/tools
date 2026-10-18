@@ -115,9 +115,9 @@ Calling `payFetch` again signs a new payment, so do not retry a paid request aut
 
 ## Permit2 approval
 
-Payments on Radius use Permit2, which needs a one-time {STABLECOIN} approval. With the Radius facilitator, the approval is gas-sponsored: the client signs it together with the first payment, and no transaction is sent.
+Payments on Radius use Permit2, which needs a {STABLECOIN} allowance. With the Radius facilitator, the allowance is gas-sponsored: the client signs an EIP-2612 permit with each payment, and no approval transaction is sent.
 
-The sponsored approval is an EIP-2612 permit for the payment amount, so it is part of the payment and is never gated. A facilitator that instead sponsors a raw unlimited approve (`erc20ApprovalGasSponsoring`) goes through the same gate as the next paragraph: `permit2Approval: 'never'` throws `approval_required`, and `onApprovalRequired` is called with `sponsored: 'erc20Approval'` and may decline.
+The permit covers only the payment amount and is settled with it, so it is part of the payment and is never gated. A facilitator that instead sponsors a raw unlimited approve (`erc20ApprovalGasSponsoring`) goes through the same gate as the next paragraph: `permit2Approval: 'never'` throws `approval_required`, and `onApprovalRequired` is called with `sponsored: 'erc20Approval'` and may decline.
 
 With a facilitator that does not sponsor any approval, the client sends one unlimited approval from the signer before the first payment. Its gas comes from {STABLECOIN} through the Turnstile, so keep about 0.01 {STABLECOIN} spare. To control this, set `permit2Approval: 'never'` or pass `onApprovalRequired`. Every payment is still a separate signature capped to its amount.
 

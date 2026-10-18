@@ -195,14 +195,15 @@ Payment rules:
 
 `onApprovalRequired` receives an `ApprovalRequest` for every allowance change: the Permit2 approval a payment needs, `approvePermit2()`, and `approve()`. Return `false` to decline; the call throws `declined` with the request as `details`.
 
-| Field              | Description                                                                  |
-| ------------------ | ---------------------------------------------------------------------------- |
-| `reason`           | `'payment'`, `'approvePermit2'`, or `'approve'`                              |
-| `network`          | The `PaymentNetwork` the approval transaction is sent on                     |
-| `asset`, `spender` | Token and the address being approved                                         |
-| `amount`           | Allowance to grant: unlimited for Permit2, the caller's amount for `approve` |
-| `currentAllowance` | The spender's current allowance                                              |
-| `offer`            | The [offer](#offers) that needs the approval; only for `'payment'`           |
+| Field              | Description                                                                                                                             |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `reason`           | `'payment'`, `'approvePermit2'`, or `'approve'`                                                                                         |
+| `network`          | The `PaymentNetwork` the approval transaction is sent on                                                                                |
+| `asset`, `spender` | Token and the address being approved                                                                                                    |
+| `amount`           | Allowance to grant: unlimited for Permit2, the caller's amount for `approve`                                                            |
+| `currentAllowance` | The spender's current allowance                                                                                                         |
+| `offer`            | The [offer](#offers) that needs the approval; only for `'payment'`                                                                      |
+| `sponsored`        | `'erc20Approval'` when the facilitator submits a raw approve this client signs (no transaction is sent by this client); unset otherwise |
 
 ### Wallet helpers
 

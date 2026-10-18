@@ -140,7 +140,7 @@ function paidWithReceipt(receipt: Record<string, unknown>, status = 200) {
 }
 
 /** Stub viem's JSON-RPC transport (global fetch) so allowance / EIP-2612 nonce reads never hit a node. */
-function stubRpc({ allowance = maxUint256, nonce = 0n }: { allowance?: bigint; nonce?: bigint } = {}) {
+function stubRpc({ allowance = maxUint256, nonce = 0n, allowanceError = false }: { allowance?: bigint; nonce?: bigint; allowanceError?: boolean } = {}) {
   const calls: string[] = [];
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const req = new Request(input, init);
@@ -150,6 +150,7 @@ function stubRpc({ allowance = maxUint256, nonce = 0n }: { allowance?: bigint; n
       if (call.method === 'eth_chainId') return { jsonrpc: '2.0', id: call.id, result: toHex(CHAIN_ID) };
       if (call.method === 'eth_call') {
         const selector = (call.params?.[0]?.data ?? '').slice(0, 10);
+        if (allowanceError && selector === '0xdd62ed3e') return { jsonrpc: '2.0', id: call.id, error: { code: -32000, message: 'allowance read failed' } };
         // allowance(address,address) → 0xdd62ed3e; nonces(address) → 0x7ecebe00
         const value = selector === '0xdd62ed3e' ? allowance : selector === '0x7ecebe00' ? nonce : 0n;
         return { jsonrpc: '2.0', id: call.id, result: toHex(value, { size: 32 }) };
@@ -679,7 +680,7 @@ describe('passthrough', () => {
 
 // -- sponsored approvals pass the approval gate (ENG-2389) -----------------------------------
 
-describe('gas-sponsored Permit2 approvals are allowance changes too', () => {
+describe('a sponsored raw approve is an allowance change, so it is gated', () => {
   const ERC20_SPONSOR = { erc20ApprovalGasSponsoring: { version: '1' } };
 
   it("permit2Approval: 'never' refuses a sponsored unlimited approve instead of signing it", async () => {
@@ -696,6 +697,13 @@ describe('gas-sponsored Permit2 approvals are allowance changes too', () => {
     await rejects(buyer(server, { onApprovalRequired: (r) => { seen.push(r); return false; } })(RESOURCE_URL), 'declined');
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ reason: 'payment', sponsored: 'erc20Approval', amount: maxUint256, currentAllowance: 0n });
+    expect(server.requests).toHaveLength(1);
+  });
+
+  it('a failed allowance read counts as no allowance: the raw approve is gated, not signed', async () => {
+    stubRpc({ allowanceError: true });
+    const server = seller(v2(UPTO, ERC20_SPONSOR));
+    await rejects(buyer(server, { permit2Approval: 'never' })(RESOURCE_URL), 'approval_required', /sponsors an approval/);
     expect(server.requests).toHaveLength(1);
   });
 
