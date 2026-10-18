@@ -147,19 +147,19 @@ import { createRadiusFetch } from 'radius-sdk/client';
 const payFetch = createRadiusFetch({ network: 'testnet', signer: process.env.RADIUS_PRIVATE_KEY as `0x${string}`, maxPerRequest: '0.01 SBC' });
 ```
 
-| Option               | Type                                         | Default            | Description                                                                                                 |
-| -------------------- | -------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `signer`             | private key, viem account, or `WalletClient` | Required           | Signs payments; sending transactions needs a key, a local account, or a `WalletClient`                      |
-| `maxPerRequest`      | `Price`                                      | Required           | Ceiling for each payment; not a cumulative budget                                                           |
-| `network`            | A preset ID or a `PaymentNetwork`            | `'mainnet'`        | Payments are made only on this network                                                                      |
-| `networks`           | Array of networks                            | —                  | Instead of `network`: pay on any of these, preferring them in order                                         |
-| `protocols`          | Array of `'x402'` and `'mpp'`                | `['x402', 'mpp']`  | Protocols to pay with, in preference order                                                                  |
-| `preferFunded`       | `boolean`                                    | `true`             | With several candidate networks, pay on one whose balance covers the price                                  |
-| `onPaymentRequired`  | `(offer) => boolean \| Promise<boolean>`     | —                  | Approve or decline an [offer](#offers) before signing                                                       |
-| `permit2Approval`    | `'auto'` or `'never'`                        | `'auto'`           | Without gas sponsoring, `'auto'` sends one unlimited Permit2 approval; `'never'` throws `approval_required` |
-| `onApprovalRequired` | `(request) => boolean \| Promise<boolean>`   | —                  | Approve or decline any allowance change this client makes; see [approval requests](#approval-requests)      |
-| `onPaid`             | `(receipt, offer) => void`                   | —                  | Called after each paid response                                                                             |
-| `fetch`              | `typeof fetch`                               | `globalThis.fetch` | Underlying fetch                                                                                            |
+| Option               | Type                                         | Default            | Description                                                                                                                                                                  |
+| -------------------- | -------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `signer`             | private key, viem account, or `WalletClient` | Required           | Signs payments; sending transactions needs a key, a local account, or a `WalletClient`                                                                                       |
+| `maxPerRequest`      | `Price`                                      | Required           | Ceiling for each payment; not a cumulative budget                                                                                                                            |
+| `network`            | A preset ID or a `PaymentNetwork`            | `'mainnet'`        | Payments are made only on this network                                                                                                                                       |
+| `networks`           | Array of networks                            | —                  | Instead of `network`: pay on any of these, preferring them in order                                                                                                          |
+| `protocols`          | Array of `'x402'` and `'mpp'`                | `['x402', 'mpp']`  | Protocols to pay with, in preference order                                                                                                                                   |
+| `preferFunded`       | `boolean`                                    | `true`             | With several candidate networks, pay on one whose balance covers the price                                                                                                   |
+| `onPaymentRequired`  | `(offer) => boolean \| Promise<boolean>`     | —                  | Approve or decline an [offer](#offers) before signing                                                                                                                        |
+| `permit2Approval`    | `'auto'` or `'never'`                        | `'auto'`           | Without gas sponsoring, `'auto'` sends one unlimited Permit2 approval; `'never'` throws `approval_required`, also for a sponsored raw approve (`erc20ApprovalGasSponsoring`) |
+| `onApprovalRequired` | `(request) => boolean \| Promise<boolean>`   | —                  | Approve or decline any allowance change this client makes; see [approval requests](#approval-requests)                                                                       |
+| `onPaid`             | `(receipt, offer) => void`                   | —                  | Called after each paid response                                                                                                                                              |
+| `fetch`              | `typeof fetch`                               | `globalThis.fetch` | Underlying fetch                                                                                                                                                             |
 
 It also accepts the [network overrides](#networks); with `networks`, they apply to the first network.
 
@@ -195,14 +195,15 @@ Payment rules:
 
 `onApprovalRequired` receives an `ApprovalRequest` for every allowance change: the Permit2 approval a payment needs, `approvePermit2()`, and `approve()`. Return `false` to decline; the call throws `declined` with the request as `details`.
 
-| Field              | Description                                                                  |
-| ------------------ | ---------------------------------------------------------------------------- |
-| `reason`           | `'payment'`, `'approvePermit2'`, or `'approve'`                              |
-| `network`          | The `PaymentNetwork` the approval transaction is sent on                     |
-| `asset`, `spender` | Token and the address being approved                                         |
-| `amount`           | Allowance to grant: unlimited for Permit2, the caller's amount for `approve` |
-| `currentAllowance` | The spender's current allowance                                              |
-| `offer`            | The [offer](#offers) that needs the approval; only for `'payment'`           |
+| Field              | Description                                                                                                                             |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `reason`           | `'payment'`, `'approvePermit2'`, or `'approve'`                                                                                         |
+| `network`          | The `PaymentNetwork` the approval transaction is sent on                                                                                |
+| `asset`, `spender` | Token and the address being approved                                                                                                    |
+| `amount`           | Allowance to grant: unlimited for Permit2, the caller's amount for `approve`                                                            |
+| `currentAllowance` | The spender's current allowance                                                                                                         |
+| `offer`            | The [offer](#offers) that needs the approval; only for `'payment'`                                                                      |
+| `sponsored`        | `'erc20Approval'` when the facilitator submits a raw approve this client signs (no transaction is sent by this client); unset otherwise |
 
 ### Wallet helpers
 

@@ -87,6 +87,12 @@ export interface ApprovalRequest {
   currentAllowance: bigint;
   /** The payment that needs the approval; only for `reason: 'payment'`. */
   offer?: PaymentOffer;
+  /**
+   * Set when no transaction is sent by this client: the allowance is granted by a signed raw
+   * `approve` transaction that the server's facilitator submits (always unlimited in @x402/evm).
+   * EIP-2612 permits are signed per payment for the payment amount, so they are not gated.
+   */
+  sponsored?: 'erc20Approval';
 }
 
 /** `details` of a `payment_rejected` error: the server's second 402, unread. */
@@ -587,17 +593,45 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     return { ...req, maxTimeoutSeconds, extra } as PaymentRequirements;
   };
 
-  /** Permit2 needs an ERC-20 allowance. Sponsored: the scheme signs a permit. Unsponsored: approve on-chain once. */
-  const ensureAllowance = async (offer: PaymentOffer): Promise<void> => {
-    if (offer.transferMethod !== 'permit2' || offer.gasSponsored) return;
+  /**
+   * Permit2 needs an ERC-20 allowance. Unsponsored: approve on-chain once. Sponsored: the scheme signs
+   * either an EIP-2612 permit (per payment, for the payment amount: part of the payment, not gated) or
+   * a raw approve transaction that the facilitator submits; the latter is an allowance change, so it
+   * passes the same gate (`permit2Approval`, `onApprovalRequired`). Returns the extension keys to
+   * withhold from the scheme, so @x402/evm never signs a raw approve on its own (it re-reads the
+   * allowance and signs when that read fails).
+   */
+  const ensureAllowance = async (offer: PaymentOffer, extensions: Record<string, unknown> | undefined): Promise<Set<string>> => {
+    const withheld = new Set<string>();
+    const has = (k: string) => extensions !== undefined && k in extensions;
+    if (offer.transferMethod !== 'permit2') return withheld;
     const wallet = wallets.get(railFor(offer.network)!)!;
-    const current = await wallet.permit2Allowance();
-    if (current >= BigInt(offer.amount)) return;
+    // The permit is preferred over the raw approve, so the latter is only reachable without it.
+    const rawApprove = has('erc20ApprovalGasSponsoring') && !has('eip2612GasSponsoring');
+    if (has('erc20ApprovalGasSponsoring') && !rawApprove) withheld.add('erc20ApprovalGasSponsoring');
+    if (offer.gasSponsored && !rawApprove) return withheld;
+    // A failed read counts as no allowance: decide explicitly rather than let the scheme sign blindly.
+    const current = offer.gasSponsored ? await wallet.permit2Allowance().catch(() => 0n) : await wallet.permit2Allowance();
+    if (current >= BigInt(offer.amount)) {
+      if (rawApprove) withheld.add('erc20ApprovalGasSponsoring');
+      return withheld;
+    }
+    const never = (options.permit2Approval ?? 'auto') === 'never';
+    if (offer.gasSponsored) {
+      const request: ApprovalRequest = {
+        reason: 'payment', network: offer.network, asset: offer.network.asset.address, spender: PERMIT2_ADDRESS,
+        amount: maxUint256, currentAllowance: current, offer, sponsored: 'erc20Approval',
+      };
+      if (never) throw new RadiusPaymentError('approval_required', `Permit2 allowance ${current} is below ${offer.amount}; the facilitator sponsors an approval but permit2Approval is 'never'`, request);
+      await authorizeApproval(request);
+      return withheld;
+    }
     const request: ApprovalRequest = { reason: 'payment', network: offer.network, asset: offer.network.asset.address, spender: PERMIT2_ADDRESS, amount: maxUint256, currentAllowance: current, offer };
-    if ((options.permit2Approval ?? 'auto') === 'never') {
+    if (never) {
       throw new RadiusPaymentError('approval_required', `Permit2 allowance ${current} is below ${offer.amount} and the facilitator does not sponsor approvals; call approvePermit2() or set permit2Approval: 'auto'`, request);
     }
     await wallet.sendApproval(request, 'Permit2 approval');
+    return withheld;
   };
 
   /**
@@ -825,9 +859,11 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
 
     const unpaid = new Headers(retry.headers); // what a redirect after payment may carry on: no payment headers
     if (offer.protocol === 'x402') {
-      await ensureAllowance(offer);
-      // Narrow the challenge to the chosen offer so the upstream selector cannot pick another.
+      const withheld = await ensureAllowance(offer, x402!.extensions as Record<string, unknown> | undefined);
+      // Narrow the challenge to the chosen offer so the upstream selector cannot pick another, and
+      // hide the sponsoring extensions that were not approved.
       const narrowed: PaymentRequired = { ...x402!, accepts: [forSigning(offer)] };
+      if (x402!.extensions && withheld.size > 0) narrowed.extensions = Object.fromEntries(Object.entries(x402!.extensions).filter(([k]) => !withheld.has(k)));
       const payload = await client.createPaymentPayload(narrowed);
       // v2 servers match `accepted` against the requirement they sent (core fields equal, their `extra`
       // a subset of ours), so echo it untouched rather than the filled-in signing copy.

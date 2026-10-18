@@ -226,20 +226,27 @@ async function runPay(
       // itself under the flags handled above, so the prompt below is always payment-driven.
       const need = req.offer ? `${formatUnits(BigInt(req.offer.amount), decimals)} ${symbol}` : undefined;
       const have = formatUnits(req.currentAllowance, decimals);
+      // `sponsored`: no transaction is sent by this wallet; the server's facilitator submits what we sign.
+      const sponsoredWhat = req.sponsored === 'erc20Approval' ? `a raw approve transaction giving Permit2 an unlimited ${symbol} allowance` : undefined;
       if (!process.stdin.isTTY) {
         refusal = { kind: 'approval-no-tty' };
         process.stderr.write(
-          `pay: this payment requires a Permit2 approval for ${symbol} (have ${have}${need ? `, need ${need}` : ''}) ` +
-            'and the server does not sponsor it. Re-run with --approve-permit2 (or -y) to grant ' +
-            'a one-time unlimited approval.\n',
+          sponsoredWhat
+            ? `pay: this payment asks you to sign ${sponsoredWhat}, which the server's facilitator will submit ` +
+                `(allowance ${have}${need ? `, need ${need}` : ''}). Re-run with --approve-permit2 (or -y) to allow it.\n`
+            : `pay: this payment requires a Permit2 approval for ${symbol} (have ${have}${need ? `, need ${need}` : ''}) ` +
+                'and the server does not sponsor it. Re-run with --approve-permit2 (or -y) to grant ' +
+                'a one-time unlimited approval.\n',
         );
         return false;
       }
       const proceed = await confirm({
-        message:
-          `Grant Permit2 (${req.spender}) an unlimited ${symbol} approval? ` +
-          `One-time setup; ${need ? `this payment needs ${need}, and ` : ''}every payment still ` +
-          'requires its own signed authorization.',
+        message: sponsoredWhat
+          ? `Sign ${sponsoredWhat} for Permit2 (${req.spender}), submitted by the server's facilitator? ` +
+            `${need ? `This payment needs ${need}. ` : ''}Every payment still requires its own signed authorization.`
+          : `Grant Permit2 (${req.spender}) an unlimited ${symbol} approval? ` +
+            `One-time setup; ${need ? `this payment needs ${need}, and ` : ''}every payment still ` +
+            'requires its own signed authorization.',
         default: false,
       });
       if (!proceed) {
