@@ -6,3 +6,10 @@ dist/
 plugins/radius/evals/results/
 plugins/radius/results.json
 evaluations/agent-payments/results/
+# Python (packages/sdk-python)
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

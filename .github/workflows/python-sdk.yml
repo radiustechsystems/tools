@@ -1,0 +1,82 @@
+name: Python SDK
+
+# Lint, typecheck and test packages/sdk-python on its oldest and newest supported Python, including the
+# cross-language interop tests against the TypeScript SDK built from the same commit (so a change to
+# either SDK that breaks their wire compatibility fails here).
+on:
+  pull_request:
+    paths:
+      - packages/sdk-python/**
+      - packages/sdk/**
+      - .github/workflows/python-sdk.yml
+  push:
+    branches: [main]
+    paths:
+      - packages/sdk-python/**
+      - packages/sdk/**
+      - .github/workflows/python-sdk.yml
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.13']
+    defaults:
+      run:
+        working-directory: packages/sdk-python
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6 # reads the version from package.json#packageManager
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # The interop tests import the TypeScript SDK's dist.
+      - name: Build the TypeScript SDK
+        working-directory: .
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter radius-sdk build
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install
+        run: uv sync --frozen --all-extras
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Typecheck
+        run: uv run mypy
+
+      - name: Test
+        env:
+          RADIUS_REQUIRE_INTEROP: '1'
+        run: uv run pytest
+
+      - name: Build distributions
+        run: uv build

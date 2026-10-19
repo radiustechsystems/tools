@@ -1,0 +1,89 @@
+[project]
+name = "radius-sdk"
+version = "0.1.0"
+description = "Accept and make Radius payments over x402 v2 (and MPP) from Python: ASGI/Starlette sellers, httpx buyers"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Radius Technology Systems" }]
+keywords = ["radius", "x402", "mpp", "payments", "stablecoin", "http-402", "agents"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Framework :: AsyncIO",
+  "Typing :: Typed",
+]
+# Pinned like the TypeScript SDK pins @x402/core: the server leans on its request pipeline
+# (payment flows, cancellation, failure-path headers), so upgrades are deliberate.
+dependencies = [
+  "x402==2.25.0",
+  "httpx>=0.28.1",
+  "eth-utils>=4.0.0",
+  "eth-hash[pycryptodome]>=0.5.0",
+]
+
+[project.optional-dependencies]
+# Buyer / agent: signing (EIP-712, transactions) and the x402 EVM schemes.
+client = ["x402[evm]==2.25.0", "eth-account>=0.13.0", "eth-abi>=5.0.0", "jsonschema>=4.0.0"]
+# Seller: the ASGI handler and middleware (Starlette, FastAPI, anything built on them).
+server = ["starlette>=0.37.0"]
+all = ["radius-sdk[client,server]"]
+
+[project.urls]
+Homepage = "https://radiustech.xyz"
+Documentation = "https://docs.radiustech.xyz"
+Repository = "https://github.com/radiustechsystems/tools"
+Source = "https://github.com/radiustechsystems/tools/tree/main/packages/sdk-python"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "uvicorn>=0.30",
+  "fastapi>=0.115",
+  "ruff>=0.6",
+  "mypy>=1.11",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/radius_sdk"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/radius_sdk", "README.md", "CHANGELOG.md", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+  "interop: cross-language tests against the built TypeScript SDK (need Node and `pnpm build`)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.format]
+# README code blocks keep their aligned comments (like the TypeScript SDK's README).
+exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "W"]
+ignore = ["E501", "UP007"]  # Union aliases stay explicit for Python 3.10 readers
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["radius_sdk"]
+mypy_path = "src"
+ignore_missing_imports = true
+check_untyped_defs = true

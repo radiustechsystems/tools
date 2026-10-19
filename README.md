@@ -6,6 +6,7 @@ Tools and developer docs for the [Radius Network](https://radiustech.xyz), manag
 | --- | --- |
 | [`packages/cli`](./packages/cli) | [`radius-cli`](https://www.npmjs.com/package/radius-cli) — CLI wallet for Radius, modeled on Foundry's `cast`; `wallet pay` pays x402 on Radius (and optionally Base) through `radius-sdk`, and `sell check` checks a seller's 402 |
 | [`packages/sdk`](./packages/sdk) | [`radius-sdk`](https://www.npmjs.com/package/radius-sdk) — accept and make x402 v2 payments on Radius (and optionally Base or any EVM chain) from any web-standard runtime, Hono, or the upstream x402 framework adapters (Express, Next.js), plus balance and settlement helpers |
+| [`packages/sdk-python`](./packages/sdk-python) | `radius-sdk` for Python: the same payments from ASGI sellers (Starlette, FastAPI) and an httpx buyer, wire-compatible with the TypeScript SDK and tested against it; not yet on PyPI |
 | [`packages/docs`](./packages/docs) | Source of [docs.radiustech.xyz](https://docs.radiustech.xyz) (Vocs on a Cloudflare Worker); private, never published to npm |
 
 ```bash
@@ -104,6 +105,8 @@ pnpm test                             # runs every package's tests
 pnpm --filter radius-cli build        # one package
 node packages/cli/dist/index.js --help
 ```
+
+The Python SDK in `packages/sdk-python` is not a pnpm package; it has its own toolchain ([uv](https://docs.astral.sh/uv/)), checks and CI workflow (`.github/workflows/python-sdk.yml`), described in [its README](packages/sdk-python/README.md#development).
 
 Requires Node ≥ 22 and pnpm 10 (`corepack enable pnpm`); `.node-version` pins Node 24 for local development, and the docs need Node ≥ 22.15. `pnpm build` / `pnpm test` / `pnpm typecheck` at the root run the npm packages in dependency order; the docs have their own commands and CI ([`packages/docs/README.md`](packages/docs/README.md)). Building or typechecking the CLI on its own also works from a fresh clone: `packages/cli` is a TypeScript project reference to `packages/sdk`, so `tsc -b` rebuilds the SDK whenever its source is newer than its `dist`; the CLI's tests read the SDK from source.
 
