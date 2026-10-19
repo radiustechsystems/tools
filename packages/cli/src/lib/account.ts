@@ -3,6 +3,7 @@ import { generatePrivateKey, privateKeyToAccount, toAccount } from 'viem/account
 import type { Hex, LocalAccount, PrivateKeyAccount } from 'viem';
 import { keystoreExists, loadAccount, readKeystoreAddress, saveKeystore } from './keystore.js';
 import { readPasswordless, writeCachedAddress, writePasswordless } from './config.js';
+import { programStatus } from './programStatus.js';
 import type { ResolvedConfig } from '../types.js';
 
 function normalizePrivateKey(input: string): Hex {
@@ -17,7 +18,9 @@ function normalizePrivateKey(input: string): Hex {
 async function resolvePassword(cfg: ResolvedConfig): Promise<string> {
   if (cfg.password !== undefined) return cfg.password;
   if (readPasswordless()) return '';
-  return await promptPassword({ message: 'Keystore password:', mask: '*' });
+  return await programStatus.whileBlocked('auth', 'Keystore password needed', () =>
+    promptPassword({ message: 'Keystore password:', mask: '*' }),
+  );
 }
 
 /**
