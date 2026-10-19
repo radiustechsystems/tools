@@ -84,7 +84,7 @@ function createFixture() {
   const configs = new Map();
   const traces = new Map();
   const ledger = new Map();
-  let sinkHits = 0;
+  const sinkRequests = [];
   let base;
   let sink;
   const put = (id, config = {}) => {
@@ -101,10 +101,14 @@ function createFixture() {
     put,
     trace: (id) => traces.get(id) ?? [],
     ledger: (id) => ledger.get(id),
-    sinkHits: () => sinkHits,
+    sinkRequests: () => sinkRequests,
     get rpcUrl() { return `${base.url}/rpc`; },
     async start() {
-      sink = await startServer(async (req, res) => { sinkHits++; await readBody(req); reply(res, 200, {}, 'leaked'); });
+      sink = await startServer(async (req, res) => {
+        sinkRequests.push({ method: req.method, paidHeader: Boolean(req.headers['payment-signature'] ?? req.headers['x-payment']) });
+        await readBody(req);
+        reply(res, 200, {}, 'redirected content');
+      });
       base = await startServer(async (req, res) => {
         const path = new URL(req.url, base.url).pathname;
         if (path === '/rpc') {
@@ -349,10 +353,15 @@ async function run() {
     });
 
     await execute('SDK-REDIRECT', 'sdk', async (errors) => {
+      // A redirect after payment is followed by fetch's rules, never with the payment header.
       const url = fixture.put('SDK-REDIRECT', { paidMode: 'redirect' });
-      const hits = fixture.sinkHits();
-      await assert.rejects(sdk()(url), (e) => e instanceof RadiusPaymentError && e.code === 'redirect_refused');
-      check(errors, 'header did not reach other origin', () => assert.equal(fixture.sinkHits(), hits));
+      const seen = fixture.sinkRequests().length;
+      const res = await sdk()(url);
+      const followed = fixture.sinkRequests().slice(seen);
+      check(errors, 'redirect followed once', () => assert.equal(followed.length, 1));
+      check(errors, 'header did not reach other origin', () => assert.equal(followed[0]?.paidHeader, false));
+      const body = await res.text();
+      check(errors, 'delivered', () => assert.equal(body, 'redirected content'));
       check(errors, 'one paid retry', () => assert.deepEqual(fixture.trace('SDK-REDIRECT').map((r) => r.paidHeader), [false, true]));
     });
 
