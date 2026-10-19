@@ -123,7 +123,7 @@ async def _decimals_of(client: RpcClient, token: TokenInput) -> int:
     return int(await client.read_contract(token, DECIMALS))
 
 
-_DISPLAY = re.compile(r"^[0-9]+(\.[0-9]+)?$")
+_DISPLAY = re.compile(r"^[0-9]+(\.[0-9]+)?\Z")
 
 
 async def to_token_atomic(client: RpcClient, token: TokenInput, amount: TokenAmount) -> int:

@@ -24,6 +24,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any, Literal, Union
 
 import httpx
@@ -85,7 +86,7 @@ MAX_TIMEOUT_SECONDS = 600
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 MAX_REDIRECTS = 20
 SPONSORING_KEYS = ("eip2612GasSponsoring", "erc20ApprovalGasSponsoring")
-_ATOMIC = re.compile(r"^[0-9]+$")
+_ATOMIC = re.compile(r"^[0-9]+\Z")
 _PAYMENT_AUTH = re.compile(r"^payment\s", re.IGNORECASE)
 _BODY_HEADERS = ("content-encoding", "content-language", "content-location", "content-type")
 _CROSS_ORIGIN_DROPPED = ("authorization", "cookie", "proxy-authorization")
@@ -523,7 +524,9 @@ class RadiusFetch(NetworkWallet):
         self._permit2_approval = permit2_approval
         self._on_approval_required = on_approval_required
         self._on_paid = on_paid
-        self._http = http_client or httpx.AsyncClient(timeout=httpx.Timeout(60.0))
+        # fetch keeps no cookie jar; the default client refuses cookies so one seller's never reach another
+        # request. A client passed in keeps whatever cookie policy its owner gave it.
+        self._http = http_client or httpx.AsyncClient(timeout=httpx.Timeout(60.0), cookies=_no_cookie_jar())
         self._owns_http = http_client is None
         self._rails: list[_Rail] = []
         for n in resolved:
@@ -665,7 +668,9 @@ class RadiusFetch(NetworkWallet):
         method, url, headers, body = p.method, p.url, httpx.Headers(p.headers), p.body
         redirected = False
         for _ in range(MAX_REDIRECTS + 1):
-            request = self._http.build_request(method, url, headers=headers, content=body)
+            # Not client.build_request: the cookies httpx's jar picked up from earlier answers would ride along.
+            # fetch keeps no cookie jar; the headers the caller set are all that is sent.
+            request = httpx.Request(method, url, headers=headers, content=body)
             response = await self._http.send(request, follow_redirects=False)
             location = response.headers.get("location") if response.status_code in REDIRECT_STATUSES else None
             if not follow or not location:
@@ -949,14 +954,12 @@ class RadiusFetch(NetworkWallet):
         def method_ok(req: dict[str, Any]) -> bool:
             if version == 1 or req.get("scheme") == "upto":
                 return True
-            m = (req.get("extra") or {}).get("assetTransferMethod")
+            m = _extra(req).get("assetTransferMethod")
             return m is None or m in ("permit2", "eip3009")
 
         supported = [(rail, req) for rail, req in known if method_ok(req)]
         if not supported:
-            methods = ", ".join(
-                dict.fromkeys(str((req.get("extra") or {}).get("assetTransferMethod")) for _, req in known)
-            )
+            methods = ", ".join(dict.fromkeys(str(_extra(req).get("assetTransferMethod")) for _, req in known))
             raise RadiusPaymentError(
                 "unsupported_transfer_method",
                 f"Server requires assetTransferMethod {methods}; this client supports permit2 and eip3009",
@@ -994,7 +997,7 @@ class RadiusFetch(NetworkWallet):
             raise RadiusPaymentError(
                 "invalid_challenge", f"Offer payTo is not an address (got {_js(req.get('payTo'))})", req
             )
-        extra = req.get("extra") or {}
+        extra = _extra(req)
         if scheme == "upto":
             facilitator = extra.get("facilitatorAddress", extra.get("facilitator"))
             if not isinstance(facilitator, str) or not is_address(facilitator):
@@ -1038,13 +1041,13 @@ class RadiusFetch(NetworkWallet):
         extra: dict[str, Any] = {
             "name": offer.network.asset.name,
             "version": offer.network.asset.version,
-            **(req.get("extra") or {}),
+            **_extra(req),
         }
         if extra.get("facilitatorAddress") is None and isinstance(extra.get("facilitator"), str):
             extra["facilitatorAddress"] = extra["facilitator"]
         t = req.get("maxTimeoutSeconds")
         timeout = (
-            min(int(t), MAX_TIMEOUT_SECONDS)
+            max(1, min(int(t), MAX_TIMEOUT_SECONDS))
             if isinstance(t, (int, float)) and not isinstance(t, bool) and t > 0
             else MAX_TIMEOUT_SECONDS
         )
@@ -1330,6 +1333,16 @@ AUTHORIZATION_TYPES: dict[str, list[dict[str, str]]] = {
         {"name": "nonce", "type": "bytes32"},
     ]
 }
+
+
+def _no_cookie_jar() -> CookieJar:
+    return CookieJar(policy=DefaultCookiePolicy(allowed_domains=[]))
+
+
+def _extra(req: Mapping[str, Any]) -> dict[str, Any]:
+    """An offer's ``extra``, or ``{}`` when it is missing or not an object."""
+    extra = req.get("extra")
+    return extra if isinstance(extra, dict) else {}
 
 
 def _parse_iso_seconds(value: str) -> int | None:

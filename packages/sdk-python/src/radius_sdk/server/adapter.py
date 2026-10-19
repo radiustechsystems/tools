@@ -59,15 +59,12 @@ class RequestAdapter:
 
 
 def raw_path(request: Request) -> str:
-    """The request path as sent (percent-encoded), like a web-standard ``URL.pathname``."""
+    """The full request path as sent (percent-encoded, a mount prefix included), like a web-standard ``URL.pathname``."""
     raw = request.scope.get("raw_path")
     if isinstance(raw, (bytes, bytearray)):
         path = raw.decode("latin-1").split("?", 1)[0]
     else:
         path = request.url.path
-    root = request.scope.get("root_path") or ""
-    if root and path.startswith(root) and (len(path) == len(root) or path[len(root)] == "/"):
-        path = path[len(root) :] or "/"
     return path
 
 

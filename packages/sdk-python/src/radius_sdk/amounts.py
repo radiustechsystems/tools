@@ -26,8 +26,8 @@ class _Asset(Protocol):
     def decimals(self) -> int: ...
 
 
-_DECIMAL = re.compile(r"^[0-9]+(\.[0-9]+)?$")
-_INTEGER = re.compile(r"^[0-9]+$")
+_DECIMAL = re.compile(r"^[0-9]+(\.[0-9]+)?\Z")
+_INTEGER = re.compile(r"^[0-9]+\Z")
 _PREFIX_UNIT = re.compile(r"^(usd|sbc)\s+", re.IGNORECASE)
 _SUFFIX_UNIT = re.compile(r"\s+(usd|sbc)$", re.IGNORECASE)
 

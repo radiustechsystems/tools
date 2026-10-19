@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 HOP_BY_HOP = ("connection", "keep-alive", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade", "expect")
 #: Codings httpx decodes when the body is read.
 DECODED = {"gzip", "x-gzip", "deflate", "br"}
-_TOKEN = re.compile(r"^[!#$%&'*+.^_`|~\w-]+$")
+_TOKEN = re.compile(r"^[!#$%&'*+.^_`|~\w-]+\Z")
 
 
 def _without_hop_by_hop(headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -68,7 +68,11 @@ def proxy_to(origin: str, *, http_client: httpx.AsyncClient | None = None) -> Ca
         ]
         headers.append(("accept-encoding", "identity"))
         body = None if request.method in ("GET", "HEAD") else await request.body()
-        res = await client.request(request.method, target, headers=headers, content=body, follow_redirects=False)
+        # Built directly, not with client.build_request: httpx would attach cookies its jar picked up from the
+        # origin's answers to other buyers. fetch has no cookie jar, and neither does this proxy.
+        res = await client.send(
+            httpx.Request(request.method, target, headers=headers, content=body), follow_redirects=False
+        )
         out = _without_hop_by_hop(list(res.headers.multi_items()))
         codings = [c.strip().lower() for c in res.headers.get("content-encoding", "").split(",") if c.strip()]
         if codings and all(c in DECODED for c in codings):

@@ -75,6 +75,8 @@ async def article(slug: str, request: Request):
     return await pay(request, lambda _request, _payment: JSONResponse(found))   # charge, then deliver
 ```
 
+Routes match the full request path, as in the TypeScript SDK: under `Mount("/v1", app)`, key them `"GET /v1/api/…"`.
+
 **Middleware for a whole app** (Starlette or FastAPI): the same options. Dynamic `pay_to` / `price`
 and `on_settled` receive the Starlette `Request`, and paid handlers read
 `request.state.radius_payment`. In the default flow the downstream response streams through.
@@ -200,7 +202,7 @@ rationale behind each rule:
 
 Pass `http_client=httpx.AsyncClient(...)` to control the seller-facing HTTP client (timeouts,
 proxies, a mock transport in tests) and `rpc_http_client=` for JSON-RPC. `RadiusFetch` is an async
-context manager; `aclose()` closes the clients it created.
+context manager; `aclose()` closes the clients it created. Like `fetch`, the default client keeps no cookies between requests.
 
 ## Chain actions
 

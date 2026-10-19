@@ -13,7 +13,7 @@ from .mpp import MPP_RECEIPT_HEADER, parse_mpp_receipt
 from .networks import PaymentNetwork, explorer_tx_url
 
 PAYMENT_RESPONSE_HEADER = "payment-response"
-_ATOMIC_AMOUNT = re.compile(r"^[0-9]+$")
+_ATOMIC_AMOUNT = re.compile(r"^[0-9]+\Z")
 
 
 @dataclass
@@ -81,7 +81,7 @@ def decode_payment_receipt(
     if not isinstance(r, dict):
         raise ValueError("payment response is not an object")
     amount = r.get("amount")
-    if amount is not None and (not isinstance(amount, str) or not _ATOMIC_AMOUNT.match(amount)):
+    if "amount" in r and (not isinstance(amount, str) or not _ATOMIC_AMOUNT.match(amount)):
         raise ValueError("payment response: 'amount' must be a non-negative integer string")
     tx = r.get("transaction")
     transaction = tx if isinstance(tx, str) and tx else None

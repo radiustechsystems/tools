@@ -9,8 +9,8 @@ from typing import Any
 
 from .networks import NETWORK_NAMES
 
-_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
-_PRIVATE_KEY = re.compile(r"^0x[0-9a-fA-F]{64}$")
+_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}\Z")
+_PRIVATE_KEY = re.compile(r"^0x[0-9a-fA-F]{64}\Z")
 
 
 def radius_env(env: Mapping[str, str | None] | None = None) -> dict[str, Any]:

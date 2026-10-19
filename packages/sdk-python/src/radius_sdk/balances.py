@@ -23,8 +23,8 @@ from typing import Any, Literal
 from .networks import SBC, NetworkInput, PaymentNetwork, preset_for_chain_id, radius_mainnet, resolve_network
 from .rpc import AbiFunction, RpcClient, block_param
 
-_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
-_WORD = re.compile(r"^0x[0-9a-fA-F]{64}$")
+_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}\Z")
+_WORD = re.compile(r"^0x[0-9a-fA-F]{64}\Z")
 BALANCE_OF = AbiFunction("balanceOf", ("address",), ("uint256",))
 
 

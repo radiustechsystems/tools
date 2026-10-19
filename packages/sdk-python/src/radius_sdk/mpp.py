@@ -274,7 +274,7 @@ def _parse_auth_params(text: str) -> dict[str, str]:
     return result
 
 
-_HEX4 = re.compile(r"^[0-9A-Fa-f]{4}$")
+_HEX4 = re.compile(r"^[0-9A-Fa-f]{4}\Z")
 
 
 def _read_quoted(text: str, start: int) -> tuple[str, int]:
@@ -392,7 +392,7 @@ class MppCredential:
     source: str | None = None
 
 
-_CREDENTIAL = re.compile(r"^Payment\s+(\S+)\s*$", re.IGNORECASE)
+_CREDENTIAL = re.compile(r"^Payment\s+(\S+)\s*\Z", re.IGNORECASE)
 
 
 def parse_mpp_credential(header: str | None) -> MppCredential | None:

@@ -154,12 +154,19 @@ class RadiusFacilitatorClient:
         self.live = opts.live
         self.timeout = opts.timeout
         self._headers = {"Content-Type": "application/json", **({"x-api-key": opts.api_key} if opts.api_key else {})}
-        self._http = http_client or opts.http_client
+        self._given_http = http_client or opts.http_client
+        self._http: httpx.AsyncClient | None = None
+        self._http_loop: asyncio.AbstractEventLoop | None = None
         self._sync_http = sync_http_client
 
     def _async(self) -> httpx.AsyncClient:
-        if self._http is None:
+        if self._given_http is not None:
+            return self._given_http
+        # An AsyncClient belongs to the loop it first ran on; a server reused under a new loop gets a new one.
+        loop = asyncio.get_running_loop()
+        if self._http is None or self._http_loop is not loop:
             self._http = httpx.AsyncClient(timeout=self.timeout, follow_redirects=True)
+            self._http_loop = loop
         return self._http
 
     def _sync(self) -> httpx.Client:
@@ -168,10 +175,13 @@ class RadiusFacilitatorClient:
         return self._sync_http
 
     async def aclose(self) -> None:
+        """Close the HTTP clients this client created (not one passed in)."""
         if self._http is not None:
             await self._http.aclose()
+            self._http = None
         if self._sync_http is not None:
             self._sync_http.close()
+            self._sync_http = None
 
     async def verify(self, payload: PaymentPayload, requirements: PaymentRequirements) -> VerifyResponse:
         res = await self._async().post(
@@ -278,6 +288,11 @@ class _UnknownOutcomes:
 
     async def settle(self, payload: PaymentPayload, requirements: PaymentRequirements) -> SettleResponse:
         return await self._call("settle", lambda: self.inner.settle(payload, requirements))
+
+    async def aclose(self) -> None:
+        close = getattr(self.inner, "aclose", None)
+        if close is not None:
+            await close()
 
     def get_supported(self) -> SupportedResponse:
         try:

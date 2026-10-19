@@ -11,7 +11,7 @@ from eth_utils import keccak
 TypedDataTypes = Mapping[str, Sequence[Mapping[str, str]]]
 """EIP-712 struct definitions: ``{"Struct": [{"name": "field", "type": "uint256"}, ...]}``."""
 
-_ARRAY = re.compile(r"^(.*)\[([0-9]*)\]$")
+_ARRAY = re.compile(r"^(.*)\[([0-9]*)\]\Z")
 
 
 def encode_typed_data_type(primary_type: str, types: TypedDataTypes) -> str:

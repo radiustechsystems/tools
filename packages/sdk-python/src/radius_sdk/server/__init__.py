@@ -151,6 +151,11 @@ class _ScopedFacilitator:
     async def settle(self, payload: Any, requirements: Any) -> Any:
         return await self.inner.settle(payload, requirements)
 
+    async def aclose(self) -> None:
+        close = getattr(self.inner, "aclose", None)
+        if close is not None:
+            await close()
+
     def get_supported(self) -> SupportedResponse:
         try:
             supported = self.inner.get_supported()
@@ -264,6 +269,11 @@ class RadiusServer:
         )
         if on_settled:
             self.on_settled(on_settled)
+
+    async def aclose(self) -> None:
+        """Close the facilitator HTTP clients the server created (call on application shutdown)."""
+        for f in self._facilitators.values():
+            await f.aclose()
 
     def unsupported_networks(self) -> str | None:
         """Why some networks' facilitators could not be reached for ``/supported``, if any did not answer."""
@@ -527,6 +537,7 @@ def _with_body(res: Response, body: bytes) -> Response:
     out = StarletteResponse(content=body, status_code=res.status_code)
     out.raw_headers = [(k, v) for k, v in res.raw_headers if k.lower() != b"content-length"]
     out.headers["content-length"] = str(len(body))
+    out.background = res.background
     return out
 
 

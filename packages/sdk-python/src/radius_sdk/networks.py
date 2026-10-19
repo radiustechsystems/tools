@@ -405,7 +405,7 @@ def is_network_id(network: PaymentNetwork, id: str) -> bool:
     return id == network.network or id in network.v1_names
 
 
-_CAIP2 = re.compile(r"^eip155:([0-9]+)$")
+_CAIP2 = re.compile(r"^eip155:([0-9]+)\Z")
 
 
 def chain_id_from_caip2(network: str) -> int | None:
