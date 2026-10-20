@@ -34,7 +34,10 @@ while time.time() < deadline:
         if not chunk:
             break
         captured += chunk
-        for label in re.findall(rb"\? ([A-Za-z ]*password):", captured[scanned:]):
+        # Prompts are coloured wherever colour is on (GitHub Actions sets GITHUB_ACTIONS, which
+        # turns it on), so match the label with CSI sequences removed.
+        plain = re.sub(rb"\x1b\[[0-9;?]*[ -/]*[@-~]", b"", captured[scanned:])
+        for label in re.findall(rb"\? ([A-Za-z ]*password):", plain):
             if label not in answered:
                 answered.add(label)
                 time.sleep(0.05)
