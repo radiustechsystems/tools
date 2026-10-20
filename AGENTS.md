@@ -8,6 +8,7 @@ From the repository root, run whichever of these apply to what you changed. Ever
 
 - `pnpm build`, `pnpm typecheck` and `pnpm test` for `packages/sdk` or `packages/cli`
 - `pnpm --filter radius-sdk run test:mpp` after changing MPP code in the SDK
+- The `program-status` skill (`.claude/skills/program-status/`) after adding or changing a prompt or network wait in `packages/cli`, or `programStatus.ts`
 - From `packages/docs`: `pnpm format:check`, `pnpm lint`, `pnpm typecheck:docs`, `pnpm docs:validate`, `pnpm test:skills`, `pnpm docs:markdown-audit`, `pnpm build`, `pnpm docs:agent-check` and `pnpm docs:sitemap-check`. Build the SDK first
 - `python3 scripts/validate_plugin.py --base-ref origin/main`, `claude plugin validate plugins/radius --strict` and `claude plugin validate . --strict` after changing `plugins/` or `.claude-plugin/`
 - The `eval-loop` skill (`.claude/skills/eval-loop/`) after changing a skill's behavior, an eval case, or SDK or CLI behavior a skill documents
