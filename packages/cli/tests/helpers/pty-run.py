@@ -43,12 +43,20 @@ while time.time() < deadline:
                 time.sleep(0.05)
                 os.write(fd, password.encode() + b"\r")
         scanned = max(0, len(captured) - 64)
+# The child closes the terminal a moment before it exits, so wait for it until the deadline
+# rather than killing it the instant the output ends.
 done, wait_status = os.waitpid(pid, os.WNOHANG)
+while done == 0 and time.time() < deadline:
+    time.sleep(0.05)
+    done, wait_status = os.waitpid(pid, os.WNOHANG)
 if done == 0:
     os.kill(pid, 9)
     os.waitpid(pid, 0)
+    print("pty-run: timed out; killed the command", file=sys.stderr)
 else:
     status = os.waitstatus_to_exitcode(wait_status)
+    if status != 0:
+        print(f"pty-run: the command exited with status {status}", file=sys.stderr)
 with open(out_path, "wb") as f:
     f.write(captured)
 sys.exit(status)
