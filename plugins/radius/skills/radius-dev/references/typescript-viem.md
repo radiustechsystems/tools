@@ -7,9 +7,11 @@ Use `radius-sdk/hono` for x402 seller middleware and `radius-sdk/client` for pay
 ## Installation
 
 ```bash
-pnpm add radius-sdk viem   # buyer and viem action examples
-# or: pnpm add radius-sdk hono   # Hono seller middleware
+pnpm add radius-sdk @x402/core @x402/evm viem   # buyer and viem action examples
+# or: pnpm add radius-sdk @x402/core hono        # Hono seller middleware
 ```
+
+`@x402/core` and `@x402/evm` are peer dependencies of `radius-sdk` 0.7.0 and later. `@x402/core` is required by every entry point; `@x402/evm` is optional and needed only by `radius-sdk/client`, and package managers do not install an optional peer for you.
 
 Requirements:
 - Node.js >= 22 for radius-sdk
