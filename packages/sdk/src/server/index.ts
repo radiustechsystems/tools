@@ -80,9 +80,10 @@ export interface RadiusServerOptions extends NetworkOverrides {
    */
   facilitator?: FacilitatorOptions | FacilitatorClient;
   /**
-   * 'before' (default): verify and settle on-chain, then run the handler — the
-   * handler only ever runs for money already received.
-   * 'after': verify, run the handler, settle if it succeeded (x402 default flow).
+   * 'before' (default): settle on-chain, then run the handler — the handler only ever runs for
+   * money already received. x402 core makes no separate `/verify` call; `/settle` validates.
+   * 'after': `/verify`, run the handler, then `/settle` if it succeeded (x402's default flow).
+   * See `SettleMode`.
    */
   settle?: SettleMode;
   /**
@@ -161,6 +162,27 @@ function scopedTo(network: PaymentNetwork, facilitator: FacilitatorClient, failu
   };
 }
 
+type ConfiguredNetwork = { network: PaymentNetwork; facilitator: FacilitatorClient; scheme: RadiusExactScheme };
+
+/** A scheme and facilitator per network, with the schemes linked as peers. */
+function configureNetworks(options: Pick<RadiusServerOptions, 'network' | 'networks' | 'facilitator' | 'gasSponsoring'> & NetworkOverrides & { settle: SettleMode }, failures: Map<PaymentNetwork, string>): ConfiguredNetwork[] {
+  if (options.network !== undefined && options.networks !== undefined) throw new Error('radius-sdk: pass network or networks, not both');
+  if (options.networks !== undefined && options.networks.length === 0) throw new Error('radius-sdk: networks is empty');
+  const entries: ServerNetwork[] = (options.networks ?? [options.network]).map((e) => (isServerNetwork(e) ? e : { network: e as NetworkInput }));
+  const configured = entries.map((entry, i) => {
+    const network = i === 0 ? resolveNetwork(entry.network, overridesOf(options)) : resolveNetwork(entry.network);
+    const choice = entry.facilitator ?? (i === 0 ? options.facilitator : undefined);
+    const facilitator = scopedTo(network, withUnknownOutcomes(isFacilitatorClient(choice) ? choice : new RadiusFacilitatorClient(network, choice)), failures);
+    const scheme = new RadiusExactScheme(network, options.settle, options.gasSponsoring ?? 'auto');
+    return { network, facilitator, scheme };
+  });
+  const chains = new Set(configured.map((c) => c.network.chainId));
+  if (chains.size !== configured.length) throw new Error('radius-sdk: a network is listed twice');
+  const schemes = configured.map((c) => c.scheme);
+  for (const scheme of schemes) scheme.peers = schemes;
+  return configured;
+}
+
 function isServerNetwork(v: unknown): v is ServerNetwork {
   return typeof v === 'object' && v !== null && 'network' in v && !('chain' in v);
 }
@@ -214,22 +236,8 @@ export class RadiusServer {
   private readonly settledHooks: NonNullable<RadiusServerOptions['onSettled']>[] = [];
 
   constructor(options: RadiusServerOptions = {}) {
-    if (options.network !== undefined && options.networks !== undefined) throw new Error('radius-sdk: pass network or networks, not both');
-    if (options.networks !== undefined && options.networks.length === 0) throw new Error('radius-sdk: networks is empty');
-    const entries: ServerNetwork[] = (options.networks ?? [options.network]).map((e) => (isServerNetwork(e) ? e : { network: e as NetworkInput }));
     const supportedFailures = (this.supportedFailures = new Map());
-    const configured = entries.map((entry, i) => {
-      const network = i === 0 ? resolveNetwork(entry.network, overridesOf(options)) : resolveNetwork(entry.network);
-      const choice = entry.facilitator ?? (i === 0 ? options.facilitator : undefined);
-      const facilitator = scopedTo(network, withUnknownOutcomes(isFacilitatorClient(choice) ? choice : new RadiusFacilitatorClient(network, choice)), supportedFailures);
-      const scheme = new RadiusExactScheme(network, options.settle ?? 'before', options.gasSponsoring ?? 'auto');
-      return { network, facilitator, scheme };
-    });
-    const chains = new Set(configured.map((c) => c.network.chainId));
-    if (chains.size !== configured.length) throw new Error('radius-sdk: a network is listed twice');
-    const schemes = configured.map((c) => c.scheme);
-    for (const scheme of schemes) scheme.peers = schemes;
-
+    const configured = configureNetworks({ ...options, settle: options.settle ?? 'before' }, supportedFailures);
     this.networks = configured.map((c) => c.network);
     const [first] = configured;
     this.network = first.network;
@@ -346,6 +354,50 @@ function missingRequest(): never {
 
 export function createRadiusServer(options: RadiusServerOptions = {}): RadiusServer {
   return new RadiusServer(options);
+}
+
+/**
+ * Radius for an x402 resource server you already run, where your code owns the verify, work and
+ * settle steps. Use `radiusFacilitators`, `registerRadius` and `assertRadiusSupported` together.
+ */
+export interface RadiusRegistration {
+  /** Networks to add, default Radius mainnet. Give a network its own facilitator with `{ network, facilitator }`; Base needs one. */
+  networks?: readonly (NetworkInput | ServerNetwork)[];
+  /**
+   * Required, because it decides whether x402 core calls `/verify`: `'before'` skips it (core's
+   * `verifyPayment()` answers `isValid: true` without checking; `/settle` validates), `'after'`
+   * verifies, lets your handler run, then settles. A pipeline that verifies, works and then
+   * settles needs `'after'`. See `SettleMode`.
+   */
+  settle: SettleMode;
+  /** See `RadiusServerOptions.gasSponsoring`. */
+  gasSponsoring?: GasSponsoringMode;
+}
+
+/**
+ * The Radius facilitators to put **first** in the list you give `new x402ResourceServer(...)`:
+ * core sends a network to the first facilitator that lists it, and these are scoped to their own
+ * network. Core cannot add facilitators to a server that exists, so build this list first.
+ */
+export function radiusFacilitators(options: RadiusRegistration): FacilitatorClient[] {
+  return configureNetworks(options, new Map()).map((c) => c.facilitator);
+}
+
+/** Register Radius's `exact` scheme for each network on `server`, built with `settle` (see `RadiusRegistration`). Returns `server`. */
+export function registerRadius(server: x402ResourceServer, options: RadiusRegistration): x402ResourceServer {
+  for (const { network, scheme } of configureNetworks(options, new Map())) server.register(network.network, scheme);
+  return server;
+}
+
+/**
+ * Throw unless a facilitator reported supporting `exact` on every network, after
+ * `server.initialize()`. Core skips a facilitator it cannot reach while another answers, which
+ * would leave Radius offered in 402s but unable to settle.
+ */
+export function assertRadiusSupported(server: x402ResourceServer, options: RadiusRegistration): void {
+  for (const { network } of configureNetworks(options, new Map())) {
+    if (!server.getSupportedKind(2, network.network, 'exact')) throw new Error(`radius-sdk: no facilitator reported supporting exact payments on ${network.name} (${network.network})`);
+  }
 }
 
 /** The application handler behind a paid route. `payment` is set when settlement ran before the handler (`settle: 'before'`, the default). */

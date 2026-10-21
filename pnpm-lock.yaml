@@ -23,6 +23,9 @@ importers:
       '@x402/core':
         specifier: 2.27.0
         version: 2.27.0
+      '@x402/evm':
+        specifier: 2.27.0
+        version: 2.27.0(typescript@5.9.3)
       commander:
         specifier: ^12.1.0
         version: 12.1.0
@@ -48,6 +51,12 @@ importers:
 
   packages/docs:
     dependencies:
+      '@x402/core':
+        specifier: 2.27.0
+        version: 2.27.0
+      '@x402/evm':
+        specifier: 2.27.0
+        version: 2.27.0(typescript@5.9.3)
       hono:
         specifier: ^4.13.7
         version: 4.13.8
@@ -139,12 +148,6 @@ importers:
       '@noble/hashes':
         specifier: ^1.8.0
         version: 1.8.0
-      '@x402/core':
-        specifier: 2.27.0
-        version: 2.27.0
-      '@x402/evm':
-        specifier: 2.27.0
-        version: 2.27.0(typescript@5.9.3)
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260910.1
@@ -164,6 +167,12 @@ importers:
       '@types/express':
         specifier: ^5.0.6
         version: 5.0.6
+      '@x402/core':
+        specifier: 2.27.0
+        version: 2.27.0
+      '@x402/evm':
+        specifier: 2.27.0
+        version: 2.27.0(typescript@5.9.3)
       '@x402/express':
         specifier: 2.27.0
         version: 2.27.0(ethers@6.17.0)(express@5.2.1)(typescript@5.9.3)
@@ -191,6 +200,12 @@ importers:
 
   packages/sdk/examples/agent-buyer:
     dependencies:
+      '@x402/core':
+        specifier: 2.27.0
+        version: 2.27.0
+      '@x402/evm':
+        specifier: 2.27.0
+        version: 2.27.0(typescript@5.9.3)
       hono:
         specifier: ^4.13.7
         version: 4.13.8
@@ -206,6 +221,9 @@ importers:
       '@astrojs/node':
         specifier: ^11.1.7
         version: 11.1.7(astro@7.3.6(@types/node@25.9.9)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+      '@x402/core':
+        specifier: 2.27.0
+        version: 2.27.0
       astro:
         specifier: ^7.3.6
         version: 7.3.6(@types/node@25.9.9)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)
@@ -222,6 +240,12 @@ importers:
 
   packages/sdk/examples/demo-dapp:
     dependencies:
+      '@x402/core':
+        specifier: 2.27.0
+        version: 2.27.0
+      '@x402/evm':
+        specifier: 2.27.0
+        version: 2.27.0(typescript@5.9.3)
       hono:
         specifier: ^4.13.7
         version: 4.13.8
@@ -247,6 +271,9 @@ importers:
 
   packages/sdk/examples/express-seller:
     dependencies:
+      '@x402/core':
+        specifier: 2.27.0
+        version: 2.27.0
       '@x402/express':
         specifier: 2.27.0
         version: 2.27.0(ethers@6.17.0)(express@5.2.1)(typescript@5.9.3)
@@ -269,6 +296,9 @@ importers:
 
   packages/sdk/examples/worker-plain:
     dependencies:
+      '@x402/core':
+        specifier: 2.27.0
+        version: 2.27.0
       radius-sdk:
         specifier: workspace:*
         version: link:../..
@@ -285,6 +315,9 @@ importers:
 
   packages/sdk/examples/worker-seller:
     dependencies:
+      '@x402/core':
+        specifier: 2.27.0
+        version: 2.27.0
       hono:
         specifier: ^4.13.7
         version: 4.13.8

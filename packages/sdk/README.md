@@ -12,30 +12,35 @@ Pre-1.0: minor versions may change the API. Release notes are in [CHANGELOG.md](
 | Entry point | What | Needs |
 | --- | --- | --- |
 | `radius-sdk` | networks, amounts, receipts, errors, `radiusEnv` (no viem at runtime) | — |
-| `radius-sdk/server` | `radiusPayments()` web-standard seller handler; `createRadiusServer()` for the upstream `@x402/*` adapters | — |
+| `radius-sdk/server` | `radiusPayments()` web-standard seller handler; `createRadiusServer()` for the upstream `@x402/*` adapters; `registerRadius()` for an x402 server you already run | `@x402/core` |
 | `radius-sdk/hono` | `radiusPayments()` Hono middleware (wraps `radius-sdk/server`) | `hono` |
-| `radius-sdk/client` | `createRadiusFetch()` paying fetch, balance and settlement actions | `viem` |
+| `radius-sdk/client` | `createRadiusFetch()` paying fetch, balance and settlement actions | `viem`, `@x402/core`, `@x402/evm` |
 
 ## Install
 
-Install the peer dependencies for the entry point you use:
+Install the peer dependencies for the entry point you use. `@x402/core` is a required peer
+dependency (the SDK is built on its resource server and client), so you install it yourself and
+your app and the SDK share one copy; a second copy of `@x402/core` breaks `instanceof` checks and
+x402 types. `@x402/evm` is a peer dependency of the buyer client only.
 
 ```sh
 # Seller on Workers / Bun / Deno / Node / route handlers
-pnpm add radius-sdk
+pnpm add radius-sdk @x402/core
 
 # Seller on Hono
-pnpm add radius-sdk hono
+pnpm add radius-sdk @x402/core hono
 
 # Seller on Express (or Next.js with @x402/next)
-pnpm add radius-sdk @x402/express express
+pnpm add radius-sdk @x402/core @x402/express express
 
 # Buyer / agent (including applications that also accept payments)
-pnpm add radius-sdk viem
+pnpm add radius-sdk @x402/core @x402/evm viem
 ```
 
-Hono and viem are optional peer dependencies. The `radius-sdk/hono` entry point requires Hono;
-`radius-sdk/client` requires viem `^2.48.11`. Root, server and Hono entry points do not load
+The supported range is `@x402/core` and `@x402/evm` `^2.27.0`; keep your `@x402/*` packages
+(including upstream adapters) on the same version. Hono, viem and `@x402/evm` are optional peer
+dependencies. The `radius-sdk/hono` entry point requires Hono; `radius-sdk/client` requires
+viem `^2.48.11` and `@x402/evm`. Root, server and Hono entry points do not load
 viem at runtime. Network definitions remain compatible with viem's `Chain` type; TypeScript consumers
 that resolve those declarations may also need viem installed for its types.
 
@@ -140,11 +145,16 @@ has an adapter for yet.
 
 What you get, on the wire, with no Radius-specific client knowledge required:
 
-- Unpaid request → `402` with a `PAYMENT-REQUIRED` header: `exact` scheme, SBC via Permit2,
-  `eip2612GasSponsoring` declared so first-time wallets need no on-chain approval.
+- Unpaid request → `402` with a `PAYMENT-REQUIRED` header: `exact` scheme, SBC via EIP-3009
+  (the transfer method the facilitator lists first, so no approval and no gas for the payer;
+  Permit2 is offered only if a facilitator lists it first), with `eip2612GasSponsoring` declared
+  when the facilitator supports it, which lets a first-time Permit2 payer skip the approval
+  transaction.
 - Paid request (`PAYMENT-SIGNATURE`) → settled on Radius through the Radius facilitator
-  **before** your handler runs (`settle: 'after'` switches to the x402 default flow), then a
-  `PAYMENT-RESPONSE` header with the transaction hash.
+  **before** your handler runs, with `/settle` as the only facilitator call (core makes no
+  separate `/verify`). `settle: 'after'` switches to the x402 default flow: `/verify`, your
+  handler, then `/settle`. Either way a `PAYMENT-RESPONSE` header with the transaction hash
+  comes back.
 - The receipt in the handler (second argument / `c.get('radiusPayment')`), and `onSettled` for
   logging with every adapter: it receives the `Request` (web-standard handler), the Hono context,
   or the x402 request context (`createRadiusServer`). `onSettled` records settlement, not
@@ -166,6 +176,42 @@ Hono `examples/worker-seller`, all on testnet.
 
 Add `mpp: { secretKey }` and the same routes also accept MPP payments; see
 [Protocols](#protocols-x402-and-mpp).
+
+### Add Radius to an x402 server you already run
+
+If your server already owns its `x402ResourceServer` and its verify, work and settle steps,
+register Radius on it instead of replacing it. The functions below share one options object.
+
+```ts
+import { x402ResourceServer } from '@x402/core/server';
+import { assertRadiusSupported, radiusFacilitators, registerRadius } from 'radius-sdk/server';
+
+const radius = { networks: ['mainnet', 'testnet'], settle: 'after' } as const;
+
+// Radius's facilitators go first: core sends a network to the first facilitator that lists it.
+const server = registerRadius(new x402ResourceServer([...radiusFacilitators(radius), yourFacilitator]), radius);
+
+await server.initialize();
+assertRadiusSupported(server, radius);   // throws if no facilitator reported `exact` on a network
+```
+
+- `x402ResourceServer` cannot gain facilitators after it is built, so create the list with
+  `radiusFacilitators()` first. Each reports only its own network, so it cannot capture another's.
+  `registerRadius()` registers the Radius `exact` scheme per network and returns the server.
+- `settle` is required, because it decides whether core calls `/verify` and your pipeline cannot
+  work without knowing. `'before'` is the `upfront` payment flow: core does not call `/verify`,
+  and `server.verifyPayment()` answers `isValid: true` **without checking the payment**; `/settle`
+  validates, and you must run it before the work. `'after'` is the `authorization` flow:
+  `verifyPayment()` calls `/verify` (a dry run), you do the work, then `settlePayment()`. Use
+  `'after'` for a verify, work, settle pipeline.
+- `assertRadiusSupported()` guards a failure core hides: it skips a facilitator it cannot reach
+  while another answers, which would leave Radius offered in 402s but unable to settle. Call it
+  after `initialize()`.
+- You build the routes and 402s, so declare `eip2612GasSponsoring` yourself if you want it (the
+  scheme removes the declaration when the facilitator does not support it). Base needs its own
+  facilitator: `networks: [{ network: 'base', facilitator: { url } }]`.
+- `networks` takes the same entries as `createRadiusServer`, default Radius mainnet; `gasSponsoring`
+  is the same option.
 
 ## Make payments (buyer / agent)
 
@@ -478,6 +524,13 @@ stablecoin, settled by the same x402 facilitator; only the envelope differs:
 | Receipt | `PAYMENT-RESPONSE` | `Payment-Receipt` |
 | Payment methods | `exact` (EIP-3009 or Permit2), `upto` | `evm` charge (EIP-3009) |
 
+The SDK's MPP is this one method: `method="evm"`, `intent="charge"`, an EIP-3009 authorization
+settled through the x402 facilitator. It is not a drop-in for a server whose MPP rail is Tempo
+through `mppx`: a Tempo challenge has `method="tempo"` and a different `request`, the SDK never
+emits one, and `createRadiusFetch` rejects it (`no_compatible_offer`). For such a server, add
+Radius over x402 ([above](#add-radius-to-an-x402-server-you-already-run)), or add `mppx`'s own
+`evm` method (the one this SDK is tested against) next to Tempo.
+
 **Buyers** pay either. `protocols` (default `['x402', 'mpp']`) is the preference order when a 402
 offers both; the protocol picked first, then networks in your order, except that a network your
 balance covers beats an unfunded one whichever protocol offers it. `offer.protocol` says which
@@ -520,4 +573,4 @@ see x402. Interop is tested against `mppx`, the reference implementation, in bot
 | `examples/demo-dapp` | Test-dapp style page exercising both sides in the browser (burner wallet or MetaMask) |
 | `test/` | unit tests (facilitator and RPC mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM; `erc20.semantics.test.ts` runs the ERC-20 actions against `evmNode.ts`, a JSON-RPC node backed by @ethereumjs/evm executing the forge-compiled `fixtures/TestToken` (rebuild with `fixtures/build.sh` after editing the .sol; the artifact is committed because CI has no forge); `mpp*.test.ts` check MPP against `mppx`, the reference implementation, in both directions); `test/e2e` real settlement, balance reconciliation and ERC-20 round trips on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
 
-Built on `@x402/core` (server and client), `@x402/evm` (client signing only), viem, and `@noble/hashes` (MPP's keccak-256 on the viem-free server).
+Built on `@x402/core` (server and client) and `@x402/evm` (client signing only), both peer dependencies you install, plus viem (client) and `@noble/hashes` (MPP's keccak-256 on the viem-free server).

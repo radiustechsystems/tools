@@ -19,14 +19,14 @@ Source, changelog, and examples: [`radiustechsystems/tools/packages/sdk`](https:
 
 Requires Node.js 22 or later, or a runtime with `fetch` such as Cloudflare Workers.
 
-| Entry point         | Exports                                                                                                      | Peer dependency   |
-| ------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------- |
-| `radius-sdk`        | Networks, `SBC`, `USDC_BASE`, price helpers, `getPaymentReceipt`, `RadiusPaymentError`, `radiusEnv`          | —                 |
-| `radius-sdk/server` | Web-standard `radiusPayments`, `createRadiusServer`, `proxyTo`, `RequestAdapter`, and server types           | —                 |
-| `radius-sdk/hono`   | `radiusPayments`, `proxyTo`, and their types                                                                 | `hono` `^4`       |
-| `radius-sdk/client` | `createRadiusFetch`, balance, ERC-20 and Permit2 actions, `getSettlement`, and the receipt and error exports | `viem` `^2.48.11` |
+| Entry point         | Exports                                                                                                              | Peer dependency                                           |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `radius-sdk`        | Networks, `SBC`, `USDC_BASE`, price helpers, `getPaymentReceipt`, `RadiusPaymentError`, `radiusEnv`                  | —                                                         |
+| `radius-sdk/server` | Web-standard `radiusPayments`, `createRadiusServer`, `registerRadius`, `proxyTo`, `RequestAdapter`, and server types | `@x402/core` `^2.27.0`                                    |
+| `radius-sdk/hono`   | `radiusPayments`, `proxyTo`, and their types                                                                         | `@x402/core` `^2.27.0`, `hono` `^4`                       |
+| `radius-sdk/client` | `createRadiusFetch`, balance, ERC-20 and Permit2 actions, `getSettlement`, and the receipt and error exports         | `@x402/core` and `@x402/evm` `^2.27.0`, `viem` `^2.48.11` |
 
-The root, server, and Hono entry points do not load viem at runtime. Install Hono only for `radius-sdk/hono`; install viem for `radius-sdk/client`.
+`@x402/core` is a required peer dependency: install it yourself (`pnpm add radius-sdk @x402/core`), and keep any upstream `@x402/*` adapters on the same version, so the SDK and your app share one copy. `@x402/evm` and viem are needed only for `radius-sdk/client`, and Hono only for `radius-sdk/hono`. The root, server, and Hono entry points do not load viem at runtime.
 
 ## radiusPayments
 
@@ -63,17 +63,17 @@ import { radiusPayments } from 'radius-sdk/hono';
 app.use('/api/*', radiusPayments({ network: 'testnet', payTo: '0xYourWalletAddress', routes: { 'GET /api/lookup': '0.001 SBC' } }));
 ```
 
-| Option          | Type                                            | Default            | Description                                                                                                        |
-| --------------- | ----------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `payTo`         | address or `(context) => address`               | Required           | Recipient of every payment unless a route overrides it                                                             |
-| `routes`        | `Record<string, RouteSpec \| Price>`            | Required           | Priced routes keyed `METHOD /path`, with `*` wildcards; a bare price is shorthand for `{ price }`                  |
-| `network`       | A preset ID or a `PaymentNetwork`               | `'mainnet'`        | See [Networks](#networks)                                                                                          |
-| `networks`      | Array of networks or `{ network, facilitator }` | —                  | Instead of `network`: every route offers one payment option per network; see [Several networks](#several-networks) |
-| `mpp`           | `{ secretKey, realm? }`                         | —                  | Also accept [MPP](#mpp) payments                                                                                   |
-| `settle`        | `'before'` or `'after'`                         | `'before'`         | `'before'` settles, then runs the handler; `'after'` runs the handler and settles only if it responds below 400    |
-| `gasSponsoring` | `'auto'` or boolean                             | `'auto'`           | Declare `eip2612GasSponsoring` in 402s; `'auto'` follows the facilitator's `/supported`                            |
-| `facilitator`   | options object or `FacilitatorClient`           | Radius facilitator | See [Facilitator](#facilitator)                                                                                    |
-| `onSettled`     | `(receipt, context) => void \| Promise<void>`   | —                  | Called once per settled payment                                                                                    |
+| Option          | Type                                            | Default            | Description                                                                                                                                                        |
+| --------------- | ----------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `payTo`         | address or `(context) => address`               | Required           | Recipient of every payment unless a route overrides it                                                                                                             |
+| `routes`        | `Record<string, RouteSpec \| Price>`            | Required           | Priced routes keyed `METHOD /path`, with `*` wildcards; a bare price is shorthand for `{ price }`                                                                  |
+| `network`       | A preset ID or a `PaymentNetwork`               | `'mainnet'`        | See [Networks](#networks)                                                                                                                                          |
+| `networks`      | Array of networks or `{ network, facilitator }` | —                  | Instead of `network`: every route offers one payment option per network; see [Several networks](#several-networks)                                                 |
+| `mpp`           | `{ secretKey, realm? }`                         | —                  | Also accept [MPP](#mpp) payments                                                                                                                                   |
+| `settle`        | `'before'` or `'after'`                         | `'before'`         | `'before'` settles, then runs the handler, with no separate `/verify` call; `'after'` calls `/verify`, runs the handler, and settles only if it responds below 400 |
+| `gasSponsoring` | `'auto'` or boolean                             | `'auto'`           | Declare `eip2612GasSponsoring` in 402s; `'auto'` follows the facilitator's `/supported`                                                                            |
+| `facilitator`   | options object or `FacilitatorClient`           | Radius facilitator | See [Facilitator](#facilitator)                                                                                                                                    |
+| `onSettled`     | `(receipt, context) => void \| Promise<void>`   | —                  | Called once per settled payment                                                                                                                                    |
 
 It also accepts the [network overrides](#networks). Dynamic `payTo` and `price` functions receive the web-standard `Request` for `radius-sdk/server`, or the Hono context for `radius-sdk/hono`; they can return promises. `onSettled` receives that same context as its second argument.
 
@@ -131,11 +131,41 @@ A `Price` is a string or number in display units of the asset (`'0.001 SBC'`, `'
 
 For `createRadiusServer`, `onSettled(receipt, context)` receives the x402 request context, which can be `undefined`. `requestOf(context)` extracts the web-standard `Request` when an SDK adapter supplied it. `RequestAdapter` wraps a `Request` as an x402 `HTTPAdapter` for custom integrations.
 
-Use upstream adapters from the `2.27.0` version line, matching the SDK's x402 dependencies. They initialize the facilitator at construction by default. Where module-scope I/O is forbidden, pass the adapter's `syncFacilitatorOnStart: false` option and await `radius.server.initialize()` during request handling before invoking the adapter. The SDK's own web-standard and Hono handlers handle lazy initialization for you.
+Use upstream adapters on the same `@x402/*` version as the `@x402/core` you install for the SDK. They initialize the facilitator at construction by default. Where module-scope I/O is forbidden, pass the adapter's `syncFacilitatorOnStart: false` option and await `radius.server.initialize()` during request handling before invoking the adapter. The SDK's own web-standard and Hono handlers handle lazy initialization for you.
 
 Upstream adapters serve x402 only; [MPP](#mpp) needs the SDK's own `radiusPayments` handler.
 
 See [Express and upstream adapters](/build/accept-payments#express-and-upstream-adapters) for an example.
+
+## Add Radius to an existing x402 server
+
+When your application already owns an `x402ResourceServer` and drives verify, work, and settle itself, register Radius on it with three functions from `radius-sdk/server`. They take one options object:
+
+```typescript
+import { x402ResourceServer } from '@x402/core/server';
+import { assertRadiusSupported, radiusFacilitators, registerRadius } from 'radius-sdk/server';
+
+const radius = { networks: ['mainnet', 'testnet'], settle: 'after' } as const;
+
+const server = registerRadius(new x402ResourceServer([...radiusFacilitators(radius), yourFacilitator]), radius);
+
+await server.initialize();
+assertRadiusSupported(server, radius);
+```
+
+| Option          | Type                                            | Default       | Description                                                |
+| --------------- | ----------------------------------------------- | ------------- | ---------------------------------------------------------- |
+| `settle`        | `'before'` or `'after'`                         | Required      | Decides whether x402 core calls `/verify`; see below       |
+| `networks`      | Array of networks or `{ network, facilitator }` | `['mainnet']` | The networks to register; Base needs its own `facilitator` |
+| `gasSponsoring` | `'auto'` or boolean                             | `'auto'`      | As for [`radiusPayments`](#radiuspayments)                 |
+
+- `radiusFacilitators(options)` returns one facilitator client per network. Put them **first** in the list you pass to `new x402ResourceServer(...)`: core sends each network to the first facilitator that lists it, and `x402ResourceServer` cannot gain facilitators after it is built. Each client reports only its own network.
+- `registerRadius(server, options)` registers the Radius `exact` scheme for each network and returns `server`.
+- `assertRadiusSupported(server, options)` throws unless a facilitator reported `exact` on every network. Call it after `server.initialize()`: core skips a facilitator it cannot reach while another answers, which would leave Radius offered in 402s but unable to settle.
+
+`settle` has no default here, because `'before'` skips the facilitator's `/verify`. With `'before'`, `server.verifyPayment()` returns `isValid: true` without checking the payment, and `/settle` does the validating, so settle before you do any work. With `'after'`, `verifyPayment()` calls `/verify` as a dry run, then you do the work, then `settlePayment()`. Use `'after'` for a verify, work, settle pipeline.
+
+You build the routes and the 402 yourself in this setup, so `radiusPayments` options such as `mpp` and `onSettled` do not apply; register `server.onAfterSettle(...)` for settlement callbacks.
 
 ## createRadiusFetch
 
@@ -320,7 +350,7 @@ Writes return a `TxResult`. The EIP-712 helpers and ABI (`permit2Domain`, `PERMI
 
 ## MPP
 
-[MPP](https://mpp.dev), the Machine Payments Protocol, is the HTTP `Payment` authentication scheme. `radius-sdk` speaks its `evm` charge method. Like x402's `exact` scheme with EIP-3009, an MPP charge is an EIP-3009 authorization of the network's stablecoin, and the same facilitator settles it. Only the HTTP envelope differs:
+[MPP](https://mpp.dev), the Machine Payments Protocol, is the HTTP `Payment` authentication scheme. `radius-sdk` speaks its `evm` charge method only (`method="evm"`, `intent="charge"`). Like x402's `exact` scheme with EIP-3009, an MPP charge is an EIP-3009 authorization of the network's stablecoin, and the same facilitator settles it. Only the HTTP envelope differs:
 
 | Step       | x402                                     | MPP                                                      |
 | ---------- | ---------------------------------------- | -------------------------------------------------------- |
@@ -342,6 +372,8 @@ const pay = radiusPayments({
 ```
 
 Every 402 then also carries an MPP challenge per network. It mirrors the x402 offers that use EIP-3009, with the same price, asset, recipient, and expiry. The challenge ID is an HMAC of the challenge under `secretKey`, so credentials are checked without stored state. Use at least 32 random characters (`openssl rand -base64 32`), and the same key on every instance that serves the routes.
+
+This is not a drop-in for a server whose MPP rail is Tempo through `mppx`. A Tempo challenge has `method="tempo"` and a different `request`; the SDK never emits one, and `createRadiusFetch` rejects it with `no_compatible_offer`. To accept Radius on such a server, add Radius over x402 ([above](#add-radius-to-an-existing-x402-server)), or add `mppx`'s own `evm` method alongside Tempo.
 
 The SDK checks the realm (`mpp.realm`, by default the request's host), the expiry, the route's current price, and the authorization's nonce, which is bound to the challenge. Then the facilitator verifies and settles the payment, before or after the handler as `settle` says. The handler's receipt and `onSettled` have `protocol: 'mpp'`, and the response carries `Payment-Receipt`.
 

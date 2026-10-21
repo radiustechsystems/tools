@@ -18,8 +18,10 @@ This guide adds per-request pricing with [`radius-sdk`](/reference/radius-sdk). 
 ## Install
 
 ```bash
-pnpm add radius-sdk
+pnpm add radius-sdk @x402/core
 ```
+
+`@x402/core` is a peer dependency of `radius-sdk` (version `^2.27.0`): install it yourself, and keep any other `@x402/*` packages on the same version, so the SDK and your app share one copy.
 
 ## Web-standard handlers
 
@@ -92,7 +94,7 @@ Route keys are `METHOD /path` and accept Hono-style `*` wildcards. Requests that
 Use `createRadiusServer` with an upstream x402 adapter when your application already uses Express or another supported framework:
 
 ```bash
-pnpm add radius-sdk @x402/express@2.27.0 express
+pnpm add radius-sdk @x402/core @x402/express express
 ```
 
 ```typescript

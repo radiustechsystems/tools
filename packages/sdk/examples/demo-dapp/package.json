@@ -9,6 +9,8 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.web.json"
   },
   "dependencies": {
+    "@x402/core": "2.27.0",
+    "@x402/evm": "2.27.0",
     "hono": "^4.13.7",
     "radius-sdk": "workspace:*",
     "viem": "^2.48.11"
