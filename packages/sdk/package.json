@@ -1,6 +1,6 @@
 {
   "name": "radius-sdk",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Accept and make Radius payments over x402 v2 — any web-standard runtime, Hono, or the upstream x402 framework adapters",
   "type": "module",
   "license": "MIT",
