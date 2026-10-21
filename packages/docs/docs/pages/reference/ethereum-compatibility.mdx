@@ -340,7 +340,7 @@ For high-throughput submission from many accounts, keep each account's in-flight
 - **Address filter required.** Queries without an `address` field return error `-33014`. General-purpose indexers must know contract addresses in advance.
 - **Block range limit.** The maximum range between `fromBlock` and `toBlock` is 1,000,000 units. Because block numbers are millisecond timestamps, this covers ~16 minutes 40 seconds — not ~1 million blocks as on Ethereum. Queries exceeding this range return error `-33002`.
 
-To query logs over longer periods, split the range into consecutive chunks of up to 1,000,000. See [`eth_getLogs`](/reference/json-rpc/methods#eth_getlogs) in the method reference.
+At current volumes, `eth_getLogs` remains usable for ingestion. Prefer larger bounded ranges over many tiny queries: block numbers are millisecond timestamps with gaps. To query logs over longer periods, split the range into consecutive chunks of up to 1,000,000. See [`eth_getLogs`](/reference/json-rpc/methods#eth_getlogs) in the method reference.
 
 ### `eth_getBlockReceipts` is not supported
 
@@ -348,8 +348,14 @@ To query logs over longer periods, split the range into consecutive chunks of up
 
 To retrieve the same data:
 
-- **All receipts for a block** — fetch the block's transactions with `eth_getBlockByNumber` (full transactions), then call `eth_getTransactionReceipt` for each. This is the direct equivalent of one `eth_getBlockReceipts` call.
+- **Receipts at a known timestamp** — fetch transactions at that timestamp with `eth_getBlockByNumber` (full transactions), then call `eth_getTransactionReceipt` for each. This is a point lookup, not a complete backfill strategy. Do not enumerate history by incrementing block numbers: millisecond timestamps have gaps and receipts can become visible later.
 - **Event indexing over a range** — query `eth_getLogs` with an `address` filter (see [`eth_getLogs` constraints](#eth_getlogs-constraints)). This is the efficient path for tracking known contracts, but returns logs only — not full receipts.
+
+### Receipt archive backfill and verification
+
+`rad_createReceiptExport` is an archive backfill and verification mechanism, not a query against the live receipt store. It requires a privileged RPC key and reads only receipt data already shipped to parquet. Low traffic can delay shipment. Parquet availability on testnet and mainnet is unconfirmed; verify access, archive coverage and shipment progress with the operator before depending on exports. An empty export does not prove there were no receipts in an interval.
+
+Use address-filtered `eth_getLogs` for ongoing event ingestion, with a queried upper bound five seconds behind `eth_blockNumber`, durable checkpoints and overlap re-scans. For a known transaction hash, use `eth_getTransactionReceipt` and retry temporary absence. Neither a five-second lag nor an empty query proves completeness. Archive verification requires confirmed coverage of the interval; compare records by chain ID, transaction hash and log index. Receipt archives do not provide historical state access.
 
 ### No historical state access
 
@@ -382,24 +388,9 @@ For event monitoring, poll `eth_getLogs` (see below). For block tracking, poll `
 
 `eth_newFilter`, `eth_newBlockFilter`, `eth_newPendingTransactionFilter`, `eth_getFilterChanges`, and `eth_getFilterLogs` are unsupported.
 
-For event monitoring over HTTP, poll `eth_getLogs` with incrementing `fromBlock`:
+For ERC-20 events, use the SDK's [transfer ingestion contract](/reference/radius-sdk#erc-20-actions). For other events, poll `eth_getLogs` sequentially with an address filter and bounded ranges. Query only through `head - 5000n`, await durable event processing and checkpoint persistence before advancing, and retry failed ranges. Avoid overlapping timer callbacks.
 
-```typescript
-let lastBlock = await client.getBlockNumber();
-
-setInterval(async () => {
-  const currentBlock = await client.getBlockNumber();
-  if (currentBlock <= lastBlock) return;
-
-  const logs = await client.getLogs({
-    address: contractAddress,
-    fromBlock: lastBlock + 1n,
-    toBlock: currentBlock,
-  });
-  lastBlock = currentBlock;
-  // process logs
-}, 15_000); // 15-second interval
-```
+Persist a scan cursor separately from any verified completeness watermark. Re-scan older ranges to recover delayed logs, and deduplicate using `(chainId, transactionHash, logIndex)`. A cursor records successful queries, not proof that every receipt in the range was visible. The five-second delay reduces exposure to visibility lag but does not bound it.
 
 ## Beneficiaries and `COINBASE (0x41)`
 
