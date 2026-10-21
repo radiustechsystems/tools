@@ -3,8 +3,10 @@
 Use `createRadiusFetch()` for application buyers. It selects a compatible offer for the configured Radius network and asset, enforces a required per-request price ceiling, signs the offered method, and handles the paid retry.
 
 ```bash
-npm install radius-sdk viem
+npm install radius-sdk @x402/core @x402/evm viem
 ```
+
+`@x402/core` and `@x402/evm` are peer dependencies of `radius-sdk` 0.7.0 and later (`@x402/evm` is optional, needed by `radius-sdk/client`), so install them yourself: package managers do not add an optional peer, and `radius-sdk/client` fails to load without `@x402/evm`. Keep every `@x402/*` package on one version.
 
 ```typescript
 import { createRadiusFetch, getPaymentReceipt } from 'radius-sdk/client';

@@ -13,8 +13,9 @@ The `radius` Claude Code plugin provides four skills:
 The SDK examples target `radius-sdk` 0.3.0 or later (`sell-api` targets 0.5.0
 or later, for MPP and several networks), and terminal wallet examples target
 `radius-cli` 0.4.0 or later (`wallet pay`); `radius-cli sell check` needs
-`radius-cli` 0.5.0. Install the peer dependency needed by the SDK entry point
-you use (`viem` for `/client`, `hono` for `/hono`).
+`radius-cli` 0.5.0. Install the peer dependencies needed by the SDK entry point
+you use: `@x402/core` for every entry point (`radius-sdk` 0.7.0 and later), plus
+`@x402/evm` and `viem` for `/client`, and `hono` for `/hono`.
 
 The `evals/` directory holds the Claude Code plugin eval cases. The
 `sell-oneshot` case shares its prompt with the repository's deterministic
