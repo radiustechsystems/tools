@@ -19,16 +19,16 @@
  * Transfer events. Radius block numbers are unix milliseconds and a node answers `eth_getLogs`
  * only for spans of at most `MAX_LOG_RANGE` (1e6 blocks, about 16.7 minutes), so `getTransfers`
  * defaults to that window before `toBlock` and fetches wider ranges in sequential chunks.
- * `watchTransfers` is the SDK's own poller (the node has no `eth_newFilter`): ordered,
- * at-least-once delivery from a resumable `fromBlock`, with `onCheckpoint` after every fully
- * delivered range. Dedupe on `transferKey(t)` (`transactionHash:logIndex`) when resuming.
+ * `watchTransfers` is the SDK's own poller (the node has no `eth_newFilter`): ordered within each queried chunk,
+ * replayable delivery from a resumable `fromBlock`, with `onCheckpoint` after every fully
+ * delivered range. Dedupe on chain ID plus `transferKey(t)` when resuming; checkpoints are not completeness watermarks.
  */
 
 import { erc20Abi, formatUnits, getAddress, parseUnits, type Account, type Address, type Chain, type Client, type Hex, type Transport } from 'viem';
 import { getBlockNumber, getLogs, readContract, waitForTransactionReceipt, writeContract } from 'viem/actions';
 import type { BalanceClient, BalanceToken } from './balances.js';
 import { RadiusPaymentError } from './errors.js';
-import { presetForChainId, resolveNetwork, type NetworkInput } from './networks.js';
+import { presetForChainId, radiusMainnet, radiusTestnet, resolveNetwork, type NetworkInput } from './networks.js';
 
 /** A viem client that can send transactions: `createWalletClient({ account, chain, transport })`. */
 export type TokenWalletClient = Client<Transport, Chain | undefined, Account | undefined>;
@@ -131,13 +131,15 @@ export interface WatchTransfersParameters {
   /**
    * First block to deliver, inclusive. Default: the head at the first poll plus one, i.e. new
    * transfers only. To resume, pass the last checkpoint + 1n: everything from there is delivered
-   * again (at-least-once), so dedupe on `transferKey` if part of it may have been processed.
+   * again, so dedupe on chain ID plus `transferKey`. Resume earlier to replay potentially late logs.
    */
   fromBlock?: bigint;
   /** Called for each transfer in (blockNumber, logIndex) order and awaited, so a slow handler slows polling rather than reordering. */
   onTransfer: (transfer: TokenTransfer) => void | Promise<void>;
-  /** Called with the last block of each fully delivered range: persist it as the cursor to resume from. */
-  onCheckpoint?: (blockNumber: bigint) => void;
+  /** Awaited after delivery, before advancing. Persist this inclusive scan cursor durably; it is not proof of completeness. Rejection retries the chunk. */
+  onCheckpoint?: (blockNumber: bigint) => void | Promise<void>;
+  /** Query behind the head by this many block-number units. Default: 5000 on Radius (5 seconds), 0 elsewhere. Must be nonnegative. */
+  blockLag?: bigint;
   /** Poll and delivery failures (including a throwing `onTransfer`). The range is retried on the next poll; nothing is skipped. */
   onError?: (error: Error) => void;
   /** Milliseconds between polls (default: the client's `pollingInterval`). Blocks are ms on Radius, so this is only latency. */
@@ -285,7 +287,7 @@ function toTransfer(log: TransferLog): TokenTransfer {
   };
 }
 
-/** Stable identity of a transfer across re-deliveries: `transactionHash:logIndex`. */
+/** Stable identity within one chain: `transactionHash:logIndex`. Prefix with chain ID in multi-chain stores. */
 export function transferKey(t: Pick<TokenTransfer, 'transactionHash' | 'logIndex'>): string {
   return `${t.transactionHash}:${t.logIndex}`;
 }
@@ -343,16 +345,19 @@ export async function getTransfers(client: BalanceClient, args: GetTransfersPara
 }
 
 /**
- * Subscribe to `Transfer` events of a token by polling the node. Delivery is ordered and
- * at-least-once: each poll fetches `next..head` (chunked), delivers every transfer, then advances
- * `next` and calls `onCheckpoint`; an error anywhere in a range leaves `next` where it was, so the
- * range is retried on the next poll and nothing is skipped. Polls never overlap. Radius has
- * sub-second, single-block finality and no reorgs, so there is no confirmation lag. Returns the
- * unwatch function.
+ * Poll sequential ranges, awaiting delivery and durable checkpoint acknowledgement before
+ * advancing. Failed chunks replay. Radius queries lag the head by 5 seconds for receipt/log
+ * visibility; this is not a completeness guarantee. Re-scan older ranges with getTransfers
+ * and deduplicate by chain ID, transaction hash and log index to reconcile late arrivals.
+ * Ordering is per chunk, not a global execution order. Returns a stop function; in-flight
+ * callbacks cannot be cancelled.
  */
 export function watchTransfers(client: BalanceClient, args: WatchTransfersParameters): () => void {
   const address = addressOf(resolveToken(client, args.token, 'watchTransfers'));
   const interval = args.pollingInterval ?? client.pollingInterval;
+  const isRadius = client.chain?.id === radiusMainnet.chainId || client.chain?.id === radiusTestnet.chainId;
+  const lag = args.blockLag ?? (isRadius ? 5_000n : 0n);
+  if (lag < 0n) throw new RadiusPaymentError('config', 'blockLag must be nonnegative');
   let next = args.fromBlock; // undefined until the first head is seen
   let active = true;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -360,15 +365,17 @@ export function watchTransfers(client: BalanceClient, args: WatchTransfersParame
     try {
       const head = await getBlockNumber(client, { cacheTime: 0 });
       if (next === undefined) next = head + 1n;
-      if (head >= next) {
-        for await (const chunk of transferChunks(client, address, { from: args.from, to: args.to, fromBlock: next, toBlock: head, maxBlockRange: args.maxBlockRange })) {
+      const upper = head - lag;
+      if (upper >= next) {
+        for await (const chunk of transferChunks(client, address, { from: args.from, to: args.to, fromBlock: next, toBlock: upper, maxBlockRange: args.maxBlockRange })) {
           for (const t of chunk.transfers) {
             if (!active) return;
             await args.onTransfer(t);
           }
           if (!active) return;
-          next = chunk.toBlock + 1n; // only after the whole chunk is delivered
-          args.onCheckpoint?.(chunk.toBlock);
+          await args.onCheckpoint?.(chunk.toBlock);
+          if (!active) return;
+          next = chunk.toBlock + 1n; // only after delivery and checkpoint acknowledgement
         }
       }
     } catch (e) {

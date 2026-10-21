@@ -272,15 +272,15 @@ const balances = await client.getBalances({ address: '0xYourWalletAddress' });
 
 `erc20Actions({ token?, network? })` from `radius-sdk/client` adds token actions to a viem client. The token defaults to the payment asset of the client's chain when it is a preset ({STABLECOIN} on Radius, USDC on Base); on any other chain, name the `token`. Amounts are base units as `bigint` or display units as a string, for example `'0.01'`.
 
-| Action                                                   | Returns                                                                                                                                                                                    |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `getTokenMetadata()`                                     | `address`, `name`, `symbol`, `decimals`, and `totalSupply`                                                                                                                                 |
-| `getAllowance({ owner, spender })`                       | Allowance in base units                                                                                                                                                                    |
-| `approve({ spender, amount })`                           | `TxResult`                                                                                                                                                                                 |
-| `transfer({ to, amount })`                               | `TxResult`                                                                                                                                                                                 |
-| `transferFrom({ from, to, amount })`                     | `TxResult`                                                                                                                                                                                 |
-| `getTransfers({ from?, to?, fromBlock?, toBlock? })`     | Transfer events; defaults to the last `MAX_LOG_RANGE` (1,000,000) blocks, and splits wider ranges                                                                                          |
-| `watchTransfers({ from?, to?, fromBlock?, onTransfer })` | A stop function; polls for new transfers in order, at least once each; resume with `fromBlock` set to the block from `onCheckpoint` plus one, and deduplicate with `transferKey(transfer)` |
+| Action                                                   | Returns                                                                                                                                                                 |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getTokenMetadata()`                                     | `address`, `name`, `symbol`, `decimals`, and `totalSupply`                                                                                                              |
+| `getAllowance({ owner, spender })`                       | Allowance in base units                                                                                                                                                 |
+| `approve({ spender, amount })`                           | `TxResult`                                                                                                                                                              |
+| `transfer({ to, amount })`                               | `TxResult`                                                                                                                                                              |
+| `transferFrom({ from, to, amount })`                     | `TxResult`                                                                                                                                                              |
+| `getTransfers({ from?, to?, fromBlock?, toBlock? })`     | Transfer events; defaults to the last `MAX_LOG_RANGE` (1,000,000) blocks, and splits wider ranges                                                                       |
+| `watchTransfers({ from?, to?, fromBlock?, onTransfer })` | A stop function; polls for transfers, awaits delivery and checkpoint persistence; resume from a durable cursor and deduplicate by chain ID plus `transferKey(transfer)` |
 
 Writes wait for the receipt. Pass `wait: false` to return as soon as the transaction is sent, with `status: 'pending'`.
 
@@ -301,6 +301,19 @@ console.log(result.status, result.explorerUrl);
 ```
 
 Block numbers on Radius are millisecond timestamps, so 1,000,000 blocks is about 17 minutes; see [`eth_getLogs`](/reference/ethereum-compatibility#eth_getlogs-constraints).
+
+`watchTransfers` queries up to `head - 5000n` on Radius mainnet and testnet: a five-second visibility delay, separate from transaction finality. `blockLag` overrides this nonnegative number of block-number units; it defaults to zero on other chains. Clients without a chain must set it explicitly for Radius. Without `fromBlock`, watching begins after the first observed head and waits for the lagged boundary to reach it. `getTransfers` remains an immediate snapshot unless you pass a lagged `toBlock`.
+
+The watcher awaits each `onTransfer` and then `onCheckpoint` before advancing to the next chunk. Return the persistence promise from both callbacks. A thrown error or rejected promise retries the chunk, including previously delivered transfers. Stopping prevents further delivery but cannot cancel an in-flight callback.
+
+A checkpoint is the inclusive end of a successfully processed query, **not a completeness watermark**. Receipts and logs can appear after their timestamp, and five seconds is not a guaranteed maximum delay. Use this ingestion contract:
+
+1. Persist each event and its downstream effect atomically, with a unique key of `(chainId, transactionHash, logIndex)`. `transferKey` supplies only the last two fields; namespace it by chain. Do not key on block number or transaction index.
+2. Persist the checkpoint only after all effects are durable. Store cursors separately for each chain, token and filter configuration. Restart at the persisted checkpoint plus one to retry unacknowledged work, or earlier for overlap.
+3. Periodically re-scan an overlapping historical window with `getTransfers`, using the same durable deduplication. Choose the window from measured visibility delays and recovery requirements. Keep replay progress separate from the forward cursor. A finite window cannot recover arbitrarily late logs; reconcile older intervals as needed.
+4. Track a separate verified-through watermark only for intervals reconciled against an authoritative source with confirmed coverage. See [receipt archive backfill](/reference/ethereum-compatibility#receipt-archive-backfill-and-verification) for availability limits.
+
+Delivery is replayable, not exactly once. Sorting is within each chunk by block number and log index; replay may deliver older events later, and these fields do not establish global execution order on Radius.
 
 ## Permit2 actions
 

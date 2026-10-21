@@ -3,7 +3,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it, vi } from 'vitest';
 import { approve, erc20Actions, formatTokenAmount, getAllowance, getTokenMetadata, getTransfers, MAX_LOG_RANGE, toTokenAtomic, transfer, transferFrom, transferKey, watchTransfers, type TokenTransfer } from '../src/erc20.js';
 import { createRadiusFetch, type ApprovalRequest } from '../src/client/index.js';
-import { definePaymentNetwork, PERMIT2_ADDRESS, radiusMainnet, radiusTestnet, SBC } from '../src/networks.js';
+import { baseMainnet, definePaymentNetwork, PERMIT2_ADDRESS, radiusMainnet, radiusTestnet, SBC } from '../src/networks.js';
 import { RadiusPaymentError } from '../src/errors.js';
 import { fakeNode } from './fakeNode.js';
 
@@ -206,12 +206,113 @@ describe('Transfer events', () => {
     await expect(client.getLogs({ fromBlock: HEAD - 1_000_000n, toBlock: HEAD })).resolves.toEqual([]);
   });
 
+  it('keeps non-Radius polling unlagged and rejects negative lag', async () => {
+    const { client, node } = eventsNode();
+    expect(() => watchTransfers(client, { blockLag: -1n, onTransfer: () => {} })).toThrow(/blockLag must be nonnegative/);
+    const base = createPublicClient({ chain: baseMainnet.chain, transport: node.transport });
+    const checkpoints: bigint[] = [];
+    const stop = watchTransfers(base, { token: SBC, fromBlock: HEAD, onTransfer: () => {}, onCheckpoint: (b) => { checkpoints.push(b); } });
+    try {
+      await vi.waitFor(() => expect(checkpoints).toEqual([HEAD]));
+      expect(ranges(node)).toEqual([[HEAD, HEAD]]);
+    } finally { stop(); }
+  });
+
+  it('recovers an arrival beyond the lag through overlap replay with durable deduplication', async () => {
+    let visible = false;
+    const { client } = eventsNode(() => visible ? [log(OWNER.address, OTHER, 1n, HEAD - 10_000n)] : []);
+    const stored = new Set<string>();
+    const ingest = (t: TokenTransfer) => { stored.add(`${client.chain.id}:${transferKey(t)}`); };
+    let checkpoint: bigint | undefined;
+    const stop = watchTransfers(client, { fromBlock: HEAD - 20_000n, onTransfer: ingest, onCheckpoint: (b) => { checkpoint = b; } });
+    try {
+      await vi.waitFor(() => expect(checkpoint).toBe(HEAD - 5_000n));
+      expect(stored.size).toBe(0);
+    } finally { stop(); }
+    visible = true;
+    for (let pass = 0; pass < 2; pass++) {
+      for (const t of await getTransfers(client, { fromBlock: HEAD - 20_000n, toBlock: checkpoint })) ingest(t);
+    }
+    expect(stored.size).toBe(1);
+    expect(checkpoint).toBe(HEAD - 5_000n);
+  });
+
+  it('lags Radius queries by five seconds and includes logs that become visible late', async () => {
+    let visible = false;
+    const { client, node } = eventsNode(() => visible ? [log(OWNER.address, OTHER, 1n, HEAD)] : []);
+    const seen: TokenTransfer[] = [];
+    const stop = watchTransfers(client, { fromBlock: HEAD, pollingInterval: 5, onTransfer: (t) => { seen.push(t); } });
+    try {
+      await vi.waitFor(() => expect(node.methods().filter((m) => m === 'eth_blockNumber').length).toBeGreaterThan(1));
+      expect(ranges(node)).toEqual([]);
+      visible = true;
+      node.setBlockNumber(HEAD + 5_000n);
+      await vi.waitFor(() => expect(seen).toHaveLength(1));
+      expect(ranges(node)).toEqual([[HEAD, HEAD]]);
+    } finally { stop(); }
+  });
+
+  it('awaits checkpoint acknowledgement and replays a rejected checkpoint after restart', async () => {
+    const { client, node } = eventsNode(() => [log(OWNER.address, OTHER, 1n, HEAD)]);
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_, r) => { reject = r; });
+    const stored = new Set<string>();
+    let deliveries = 0;
+    let entered = false;
+    let durable = HEAD - 1n;
+    const errors: string[] = [];
+    const ingest = (t: TokenTransfer) => { deliveries++; stored.add(`${client.chain.id}:${transferKey(t)}`); };
+    const stop = watchTransfers(client, {
+      blockLag: 0n, fromBlock: durable + 1n, pollingInterval: 5, onTransfer: ingest,
+      onCheckpoint: async () => { entered = true; await pending; },
+      onError: (e) => { errors.push(e.message); stop(); },
+    });
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true));
+      node.setBlockNumber(HEAD + 10n);
+      await new Promise((r) => setTimeout(r, 25));
+      expect(ranges(node)).toEqual([[HEAD, HEAD]]);
+      reject(new Error('checkpoint unavailable'));
+      await vi.waitFor(() => expect(errors).toEqual(['checkpoint unavailable']));
+    } finally { stop(); }
+    const resumed = watchTransfers(client, {
+      blockLag: 0n, fromBlock: durable + 1n, pollingInterval: 5, onTransfer: ingest,
+      onCheckpoint: async (b) => { durable = b; },
+    });
+    try {
+      await vi.waitFor(() => expect(durable).toBe(HEAD + 10n));
+      expect(deliveries).toBe(2);
+      expect(stored.size).toBe(1);
+      expect(ranges(node)[1]).toEqual([HEAD, HEAD + 10n]);
+    } finally { resumed(); }
+  });
+
+  it('retries the same chunk after synchronous and asynchronous checkpoint failures', async () => {
+    const { client, node } = eventsNode(() => [log(OWNER.address, OTHER, 1n, HEAD)]);
+    let attempts = 0;
+    const errors: string[] = [];
+    const stop = watchTransfers(client, {
+      blockLag: 0n, fromBlock: HEAD, pollingInterval: 5, onTransfer: () => {},
+      onCheckpoint: () => {
+        attempts++;
+        if (attempts === 1) throw new Error('sync');
+        if (attempts === 2) return Promise.reject(new Error('async'));
+      },
+      onError: (e) => { errors.push(e.message); },
+    });
+    try {
+      await vi.waitFor(() => expect(attempts).toBe(3));
+      expect(errors).toEqual(['sync', 'async']);
+      expect(ranges(node)).toEqual([[HEAD, HEAD], [HEAD, HEAD], [HEAD, HEAD]]);
+    } finally { stop(); }
+  });
+
   it('watchTransfers delivers new transfers only by default, in order, and checkpoints each range', async () => {
     let pending: unknown[] = [];
     const { client, node } = eventsNode(() => { const out = pending; pending = []; return out; });
     const seen: TokenTransfer[] = [];
     const checkpoints: bigint[] = [];
-    const unwatch = watchTransfers(client, { from: OWNER.address, onTransfer: (t) => { seen.push(t); }, onCheckpoint: (b) => checkpoints.push(b), pollingInterval: 5 });
+    const unwatch = watchTransfers(client, { blockLag: 0n, from: OWNER.address, onTransfer: (t) => { seen.push(t); }, onCheckpoint: (b) => { checkpoints.push(b); }, pollingInterval: 5 });
     await vi.waitFor(() => expect(node.methods().filter((m) => m === 'eth_blockNumber').length).toBeGreaterThan(1));
     expect(node.methods()).not.toContain('eth_getLogs');
     expect(node.methods()).not.toContain('eth_newFilter');
@@ -235,7 +336,7 @@ describe('Transfer events', () => {
   it('watchTransfers resumes from fromBlock and chunks the backlog, checkpointing per chunk', async () => {
     const { client, node } = eventsNode();
     const checkpoints: bigint[] = [];
-    const unwatch = watchTransfers(client, { fromBlock: HEAD - 2_500_000n, onTransfer: () => {}, onCheckpoint: (b) => checkpoints.push(b), pollingInterval: 5 });
+    const unwatch = watchTransfers(client, { blockLag: 0n, fromBlock: HEAD - 2_500_000n, onTransfer: () => {}, onCheckpoint: (b) => { checkpoints.push(b); }, pollingInterval: 5 });
     await vi.waitFor(() => expect(checkpoints).toHaveLength(3));
     unwatch();
     expect(ranges(node)).toEqual([
@@ -252,7 +353,7 @@ describe('Transfer events', () => {
     const errors: string[] = [];
     const checkpoints: bigint[] = [];
     const seen: TokenTransfer[] = [];
-    const unwatch = watchTransfers(client, { fromBlock: HEAD - 5n, onTransfer: (t) => { seen.push(t); }, onCheckpoint: (b) => checkpoints.push(b), onError: (e) => errors.push(e.message), pollingInterval: 5 });
+    const unwatch = watchTransfers(client, { blockLag: 0n, fromBlock: HEAD - 5n, onTransfer: (t) => { seen.push(t); }, onCheckpoint: (b) => { checkpoints.push(b); }, onError: (e) => errors.push(e.message), pollingInterval: 5 });
     await vi.waitFor(() => expect(seen).toHaveLength(1));
     unwatch();
     expect(errors).toHaveLength(1);
@@ -266,7 +367,7 @@ describe('Transfer events', () => {
     let calls = 0;
     const errors: string[] = [];
     const checkpoints: bigint[] = [];
-    const unwatch = watchTransfers(client, { fromBlock: HEAD, onTransfer: () => { if (++calls === 1) throw new Error('handler'); }, onCheckpoint: (b) => checkpoints.push(b), onError: (e) => errors.push(e.message), pollingInterval: 5 });
+    const unwatch = watchTransfers(client, { blockLag: 0n, fromBlock: HEAD, onTransfer: () => { if (++calls === 1) throw new Error('handler'); }, onCheckpoint: (b) => { checkpoints.push(b); }, onError: (e) => errors.push(e.message), pollingInterval: 5 });
     await vi.waitFor(() => expect(checkpoints).toEqual([HEAD]));
     unwatch();
     expect(errors).toEqual(['handler']);

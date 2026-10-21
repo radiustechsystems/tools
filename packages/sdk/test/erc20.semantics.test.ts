@@ -115,7 +115,7 @@ describe('ERC-20 actions executed by an EVM', () => {
   it('watchTransfers sees a live transfer with the fields the contract emitted', async () => {
     const seen: TokenTransfer[] = [];
     const checkpoints: bigint[] = [];
-    const unwatch = watchTransfers(pub, { token, to: OTHER, fromBlock: node.blockNumber() + 1n, onTransfer: (t) => { seen.push(t); }, onCheckpoint: (b) => checkpoints.push(b), pollingInterval: 5 });
+    const unwatch = watchTransfers(pub, { blockLag: 0n, token, to: OTHER, fromBlock: node.blockNumber() + 1n, onTransfer: (t) => { seen.push(t); }, onCheckpoint: (b) => { checkpoints.push(b); }, pollingInterval: 5 });
     const r = await owner.transfer({ to: OTHER, amount: '0.25' });
     await vi.waitFor(() => expect(seen).toHaveLength(1));
     unwatch();
