@@ -140,6 +140,9 @@ function isFacilitatorClient(v: unknown): v is FacilitatorClient {
   return typeof v === 'object' && v !== null && typeof (v as FacilitatorClient).settle === 'function' && typeof (v as FacilitatorClient).getSupported === 'function';
 }
 
+/** Kinds reported through a scoped facilitator, so `assertRadiusSupported` can tell whose answer core kept. */
+const radiusKinds = new WeakSet<object>();
+
 /**
  * A facilitator that reports only `network`'s kinds. x402 core routes each network to the first
  * facilitator listing it, so without this a facilitator configured for one network (e.g. a
@@ -153,7 +156,9 @@ function scopedTo(network: PaymentNetwork, facilitator: FacilitatorClient, failu
       try {
         const supported = await facilitator.getSupported();
         failures.delete(network);
-        return { ...supported, kinds: supported.kinds.filter((k) => k.network === network.network) };
+        const kinds = supported.kinds.filter((k) => k.network === network.network);
+        for (const kind of kinds) radiusKinds.add(kind);
+        return { ...supported, kinds };
       } catch (e) {
         failures.set(network, e instanceof Error ? e.message : String(e));
         throw e;
@@ -390,13 +395,17 @@ export function registerRadius(server: x402ResourceServer, options: RadiusRegist
 }
 
 /**
- * Throw unless a facilitator reported supporting `exact` on every network, after
- * `server.initialize()`. Core skips a facilitator it cannot reach while another answers, which
- * would leave Radius offered in 402s but unable to settle.
+ * Throw unless a facilitator from `radiusFacilitators` reported supporting `exact` on every
+ * network, after `server.initialize()`. Core skips a facilitator it cannot reach while another
+ * answers, which would leave Radius offered in 402s but unable to settle, or settled by a
+ * facilitator that is not the one you configured. Only facilitators from `radiusFacilitators`
+ * count: a network answered by another facilitator in your list fails the check too.
  */
 export function assertRadiusSupported(server: x402ResourceServer, options: RadiusRegistration): void {
   for (const { network } of configureNetworks(options, new Map())) {
-    if (!server.getSupportedKind(2, network.network, 'exact')) throw new Error(`radius-sdk: no facilitator reported supporting exact payments on ${network.name} (${network.network})`);
+    const kind = server.getSupportedKind(2, network.network, 'exact');
+    if (!kind) throw new Error(`radius-sdk: no facilitator reported supporting exact payments on ${network.name} (${network.network})`);
+    if (!radiusKinds.has(kind)) throw new Error(`radius-sdk: the Radius facilitator did not report ${network.name} (${network.network}), so another facilitator in the list answers for it; put radiusFacilitators(...) first and check that it is reachable`);
   }
 }
 

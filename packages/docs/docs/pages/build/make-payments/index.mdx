@@ -17,8 +17,10 @@ This guide pays for [x402](/build/x402)-protected resources from TypeScript with
 ## Install
 
 ```bash
-pnpm add radius-sdk viem
+pnpm add radius-sdk @x402/core @x402/evm viem
 ```
+
+`@x402/core` and `@x402/evm` are peer dependencies of `radius-sdk` (version `^2.27.0`): install them yourself so the SDK and your app share one copy.
 
 ## Create a paying fetch
 

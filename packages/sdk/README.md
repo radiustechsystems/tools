@@ -11,7 +11,7 @@ Pre-1.0: minor versions may change the API. Release notes are in [CHANGELOG.md](
 
 | Entry point | What | Needs |
 | --- | --- | --- |
-| `radius-sdk` | networks, amounts, receipts, errors, `radiusEnv` (no viem at runtime) | — |
+| `radius-sdk` | networks, amounts, receipts, errors, `radiusEnv` (no viem at runtime) | `@x402/core` |
 | `radius-sdk/server` | `radiusPayments()` web-standard seller handler; `createRadiusServer()` for the upstream `@x402/*` adapters; `registerRadius()` for an x402 server you already run | `@x402/core` |
 | `radius-sdk/hono` | `radiusPayments()` Hono middleware (wraps `radius-sdk/server`) | `hono` |
 | `radius-sdk/client` | `createRadiusFetch()` paying fetch, balance and settlement actions | `viem`, `@x402/core`, `@x402/evm` |
@@ -205,8 +205,13 @@ assertRadiusSupported(server, radius);   // throws if no facilitator reported `e
   `verifyPayment()` calls `/verify` (a dry run), you do the work, then `settlePayment()`. Use
   `'after'` for a verify, work, settle pipeline.
 - `assertRadiusSupported()` guards a failure core hides: it skips a facilitator it cannot reach
-  while another answers, which would leave Radius offered in 402s but unable to settle. Call it
-  after `initialize()`.
+  while another answers, which would leave Radius offered in 402s but unable to settle (or settled
+  by a facilitator you did not configure). Call it after `initialize()`. It passes only when the
+  facilitator from `radiusFacilitators()` is the one that reported `exact` for each network, so a
+  network answered by another facilitator in your list fails it too.
+- A facilitator call that gets no answer (a network error, a non-x402 error body) throws
+  `FacilitatorResponseError`: the outcome is unknown, and a settle may have reached the chain.
+  Answer with a 5xx, not as a rejected payment.
 - You build the routes and 402s, so declare `eip2612GasSponsoring` yourself if you want it (the
   scheme removes the declaration when the facilitator does not support it). Base needs its own
   facilitator: `networks: [{ network: 'base', facilitator: { url } }]`.

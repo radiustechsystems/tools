@@ -19,12 +19,12 @@ Source, changelog, and examples: [`radiustechsystems/tools/packages/sdk`](https:
 
 Requires Node.js 22 or later, or a runtime with `fetch` such as Cloudflare Workers.
 
-| Entry point         | Exports                                                                                                              | Peer dependency                                           |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `radius-sdk`        | Networks, `SBC`, `USDC_BASE`, price helpers, `getPaymentReceipt`, `RadiusPaymentError`, `radiusEnv`                  | —                                                         |
-| `radius-sdk/server` | Web-standard `radiusPayments`, `createRadiusServer`, `registerRadius`, `proxyTo`, `RequestAdapter`, and server types | `@x402/core` `^2.27.0`                                    |
-| `radius-sdk/hono`   | `radiusPayments`, `proxyTo`, and their types                                                                         | `@x402/core` `^2.27.0`, `hono` `^4`                       |
-| `radius-sdk/client` | `createRadiusFetch`, balance, ERC-20 and Permit2 actions, `getSettlement`, and the receipt and error exports         | `@x402/core` and `@x402/evm` `^2.27.0`, `viem` `^2.48.11` |
+| Entry point         | Exports                                                                                                                                                             | Peer dependency                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `radius-sdk`        | Networks, `SBC`, `USDC_BASE`, price helpers, `getPaymentReceipt`, `RadiusPaymentError`, `radiusEnv`                                                                 | `@x402/core` `^2.27.0`                                    |
+| `radius-sdk/server` | Web-standard `radiusPayments`, `createRadiusServer`, `radiusFacilitators`, `registerRadius`, `assertRadiusSupported`, `proxyTo`, `RequestAdapter`, and server types | `@x402/core` `^2.27.0`                                    |
+| `radius-sdk/hono`   | `radiusPayments`, `proxyTo`, and their types                                                                                                                        | `@x402/core` `^2.27.0`, `hono` `^4`                       |
+| `radius-sdk/client` | `createRadiusFetch`, balance, ERC-20 and Permit2 actions, `getSettlement`, and the receipt and error exports                                                        | `@x402/core` and `@x402/evm` `^2.27.0`, `viem` `^2.48.11` |
 
 `@x402/core` is a required peer dependency: install it yourself (`pnpm add radius-sdk @x402/core`), and keep any upstream `@x402/*` adapters on the same version, so the SDK and your app share one copy. `@x402/evm` and viem are needed only for `radius-sdk/client`, and Hono only for `radius-sdk/hono`. The root, server, and Hono entry points do not load viem at runtime.
 
@@ -161,7 +161,8 @@ assertRadiusSupported(server, radius);
 
 - `radiusFacilitators(options)` returns one facilitator client per network. Put them **first** in the list you pass to `new x402ResourceServer(...)`: core sends each network to the first facilitator that lists it, and `x402ResourceServer` cannot gain facilitators after it is built. Each client reports only its own network.
 - `registerRadius(server, options)` registers the Radius `exact` scheme for each network and returns `server`.
-- `assertRadiusSupported(server, options)` throws unless a facilitator reported `exact` on every network. Call it after `server.initialize()`: core skips a facilitator it cannot reach while another answers, which would leave Radius offered in 402s but unable to settle.
+- `assertRadiusSupported(server, options)` throws unless the facilitator from `radiusFacilitators` reported `exact` on every network. Call it after `server.initialize()`: core skips a facilitator it cannot reach while another answers, which would leave Radius offered in 402s but unable to settle, or settled by a facilitator you did not configure. A network answered by another facilitator in your list fails the check too.
+- A facilitator call that gets no answer (a network error or a non-x402 error body) throws `FacilitatorResponseError`: the outcome is unknown, and a settle may have reached the chain. Answer with a 5xx, not as a rejected payment.
 
 `settle` has no default here, because `'before'` skips the facilitator's `/verify`. With `'before'`, `server.verifyPayment()` returns `isValid: true` without checking the payment, and `/settle` does the validating, so settle before you do any work. With `'after'`, `verifyPayment()` calls `/verify` as a dry run, then you do the work, then `settlePayment()`. Use `'after'` for a verify, work, settle pipeline.
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { x402ResourceServer, type FacilitatorClient } from '@x402/core/server';
+import { FacilitatorResponseError, x402ResourceServer, type FacilitatorClient } from '@x402/core/server';
 import type { PaymentPayload, PaymentRequirements, SupportedResponse } from '@x402/core/types';
 import { radiusMainnet, radiusTestnet } from '../src/networks.js';
 import { RadiusExactScheme, assertRadiusSupported, radiusFacilitators, registerRadius, type RadiusRegistration } from '../src/server/index.js';
@@ -37,6 +37,7 @@ function mockRadiusFacilitator() {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
     if (url.endsWith('/verify')) return Response.json({ isValid: true, payer: '0xabc' });
+    if (url.endsWith('/settle')) return Response.json({ success: true, transaction: '0xdead', network: radiusTestnet.network, payer: '0xabc' });
     throw new Error(`unexpected fetch ${url}`);
   });
   return calls;
@@ -82,11 +83,82 @@ describe('adding Radius to an existing x402 resource server', () => {
     expect(other.verify).not.toHaveBeenCalled();
   });
 
+  it('settles through the Radius facilitator after /verify, end to end', async () => {
+    const calls = mockRadiusFacilitator();
+    const other = otherFacilitator([{ ...BASE_KIND, network: radiusTestnet.network }]);
+    const options: RadiusRegistration = { settle: 'after', networks: [{ network: 'testnet', facilitator: { live: false } }] };
+    const server = registerRadius(new x402ResourceServer([...radiusFacilitators(options), other]), options);
+    await server.initialize();
+    assertRadiusSupported(server, options);
+
+    const r = requirements(radiusTestnet.network);
+    const payload = payloadFor(r);
+    await expect(server.verifyPayment(payload, r)).resolves.toMatchObject({ isValid: true });
+    await expect(server.settlePayment(payload, r)).resolves.toMatchObject({ success: true, transaction: '0xdead' });
+    expect(calls).toEqual([`${radiusTestnet.facilitatorUrl}/verify`, `${radiusTestnet.facilitatorUrl}/settle`]);
+    expect(other.verify).not.toHaveBeenCalled();
+    expect(other.settle).not.toHaveBeenCalled();
+  });
+
+  it("with 'before', /settle is the only facilitator call", async () => {
+    const calls = mockRadiusFacilitator();
+    const options: RadiusRegistration = { settle: 'before', networks: [{ network: 'testnet', facilitator: { live: false } }] };
+    const server = registerRadius(new x402ResourceServer(radiusFacilitators(options)), options);
+    await server.initialize();
+    const r = requirements(radiusTestnet.network);
+    await server.verifyPayment(payloadFor(r), r);
+    await expect(server.settlePayment(payloadFor(r), r)).resolves.toMatchObject({ success: true });
+    expect(calls).toEqual([`${radiusTestnet.facilitatorUrl}/settle`]);
+  });
+
+  it('reports a facilitator call that gets no answer as an unknown outcome, not a rejection', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
+    const options: RadiusRegistration = { settle: 'after', networks: [{ network: 'testnet', facilitator: { live: false } }] };
+    const server = registerRadius(new x402ResourceServer(radiusFacilitators(options)), options);
+    await server.initialize();
+    const r = requirements(radiusTestnet.network);
+    await expect(server.settlePayment(payloadFor(r), r)).rejects.toBeInstanceOf(FacilitatorResponseError);
+  });
+
   it('fails the startup check when no facilitator reports a network', async () => {
     const options = offline('after');
     const server = registerRadius(new x402ResourceServer(otherFacilitator()), options);
     await server.initialize();
     expect(() => assertRadiusSupported(server, options)).toThrow(/no facilitator reported supporting exact payments on radius \(eip155:723487\)/);
+  });
+});
+
+describe('the startup check and its inputs', () => {
+  it('fails when the Radius facilitator is unreachable and another one answers for the network', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const options: RadiusRegistration = { settle: 'after', networks: [{ network: 'testnet', facilitator: { url: 'https://facilitator.invalid' } }] };
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
+    const other = otherFacilitator([{ ...BASE_KIND, network: radiusTestnet.network }]);
+    const server = registerRadius(new x402ResourceServer([...radiusFacilitators(options), other]), options);
+    await server.initialize();
+    expect(server.getSupportedKind(2, radiusTestnet.network, 'exact')).toBeDefined();
+    expect(() => assertRadiusSupported(server, options)).toThrow(/Radius facilitator did not report/);
+  });
+
+  it('fails when another facilitator is listed ahead of the Radius ones', async () => {
+    const options = offline('after');
+    const other = otherFacilitator([{ ...BASE_KIND, network: radiusTestnet.network }]);
+    const server = registerRadius(new x402ResourceServer([other, ...radiusFacilitators(options)]), options);
+    await server.initialize();
+    expect(() => assertRadiusSupported(server, options)).toThrow(/another facilitator/);
+  });
+
+  it('rejects an empty or repeated network list and an unknown network', () => {
+    expect(() => radiusFacilitators({ settle: 'after', networks: [] })).toThrow(/networks is empty/);
+    expect(() => registerRadius(new x402ResourceServer(), { settle: 'after', networks: ['testnet', 'testnet'] })).toThrow(/listed twice/);
+    expect(() => assertRadiusSupported(new x402ResourceServer(), { settle: 'after', networks: ['nowhere' as never] })).toThrow();
+  });
+
+  it('registers again without error, keeping the latest settle mode', () => {
+    const server = new x402ResourceServer();
+    registerRadius(server, { settle: 'before', networks: ['testnet'] });
+    registerRadius(server, { settle: 'after', networks: ['testnet'] });
+    expect((server.getRegisteredScheme(radiusTestnet.network, 'exact') as RadiusExactScheme).settle).toBe('after');
   });
 });
 
@@ -119,14 +191,16 @@ describe('settle mode and the /verify call', () => {
     expect(new RadiusExactScheme(radiusTestnet, 'after').paymentFlows.eip3009.default).toBe('authorization');
   });
 
-  it("warns once when a scheme is built without a settle mode, then keeps the 'before' default", () => {
+  it("warns once when a scheme is built without a settle mode, then keeps the 'before' default", async () => {
+    vi.resetModules(); // a fresh module, so the once-per-process flag does not depend on test order
+    const { RadiusExactScheme: Fresh } = await import('../src/server/scheme.js');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const scheme = new RadiusExactScheme(radiusTestnet);
-    new RadiusExactScheme(radiusTestnet);
+    const scheme = new Fresh(radiusTestnet);
+    new Fresh(radiusTestnet);
     expect(scheme.settle).toBe('before');
     expect(scheme.paymentFlows.eip3009.default).toBe('upfront');
     expect(warn.mock.calls.filter(([m]) => String(m).includes('RadiusExactScheme defaults settle'))).toHaveLength(1);
-    new RadiusExactScheme(radiusTestnet, 'after');
+    new Fresh(radiusTestnet, 'after');
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });
