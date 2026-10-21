@@ -1,6 +1,6 @@
 {
   "name": "radius",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Radius Network tools for x402 payments, blockchain development, and testnet faucet",
   "author": {
     "name": "Radius Technology Systems"

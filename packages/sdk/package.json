@@ -40,15 +40,18 @@
     "test:imports": "pnpm run build && node --test scripts/imports.test.mjs"
   },
   "dependencies": {
-    "@noble/hashes": "^1.8.0",
-    "@x402/core": "2.27.0",
-    "@x402/evm": "2.27.0"
+    "@noble/hashes": "^1.8.0"
   },
   "peerDependencies": {
+    "@x402/core": "^2.27.0",
+    "@x402/evm": "^2.27.0",
     "hono": "^4.0.0",
     "viem": "^2.48.11"
   },
   "peerDependenciesMeta": {
+    "@x402/evm": {
+      "optional": true
+    },
     "hono": {
       "optional": true
     },
@@ -63,6 +66,8 @@
     "@ethereumjs/util": "10.1.3",
     "@hono/node-server": "^2.1.5",
     "@types/express": "^5.0.6",
+    "@x402/core": "2.27.0",
+    "@x402/evm": "2.27.0",
     "@x402/express": "2.27.0",
     "express": "^5.2.1",
     "hono": "^4.13.7",

@@ -139,6 +139,7 @@ Current SDK behavior with mitigations, from the seller evaluation suite: [gotcha
 | `'after'` mode, failed settlement | Body withheld, handler headers leak (Hono, Express). Keep `'before'`. |
 | Wildcard route priced once | A payment for `/api/x` unlocks `/api/y` at the same price. Price routes by value. |
 | MPP on Express/Next adapters | Not served. Use `radiusPayments`/Hono for MPP. |
+| Seller's MPP rail is Tempo (`mppx`) | The SDK's MPP is the `evm` charge method only, not a drop-in: it never emits or pays a `method="tempo"` challenge. See [protocols.md](references/protocols.md). |
 | Amount `1000000000000000` | 18-decimal mistake. SBC and USDC have 6: `'0.001'` = `'1000'`. |
 
 ## Progressive disclosure

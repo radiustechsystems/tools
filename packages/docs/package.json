@@ -24,6 +24,8 @@
     "typecheck:docs": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json && tsc --noEmit -p worker/tsconfig.json"
   },
   "dependencies": {
+    "@x402/core": "2.27.0",
+    "@x402/evm": "2.27.0",
     "hono": "^4.13.7",
     "lucide-react": "^0.576.0",
     "radius-sdk": "workspace:*",

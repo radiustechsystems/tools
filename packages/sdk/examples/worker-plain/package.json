@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@x402/core": "2.27.0",
     "radius-sdk": "workspace:*"
   },
   "devDependencies": {

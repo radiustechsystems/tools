@@ -2,21 +2,45 @@ import type { AssetAmount, Network, PaymentRequirements, Price as X402Price, Sch
 import { resolvePrice, type Price } from '../amounts.js';
 import type { PaymentNetwork } from '../networks.js';
 
+/**
+ * When a payment settles relative to your handler, and with it whether x402 core calls the
+ * facilitator's `/verify`:
+ *
+ * - `'before'` (the `upfront` payment flow): `/settle` verifies and settles in one call, then the
+ *   handler runs, so it only ever runs for money already received. x402 core does **not** call
+ *   `/verify`: `x402ResourceServer.verifyPayment()` returns `isValid: true` without checking the
+ *   payment.
+ * - `'after'` (the `authorization` payment flow, x402's default): `/verify` runs first (a dry run,
+ *   no funds move), then the handler, then `/settle` if the handler succeeded. A failed handler
+ *   costs the payer nothing.
+ *
+ * `radiusPayments()` and `createRadiusServer()` default to `'before'`. A server whose verify,
+ * work and settle steps you drive yourself must say which it wants, because `'before'` skips
+ * `/verify`.
+ */
 export type SettleMode = 'before' | 'after';
 /** 'auto': declare gas sponsoring iff the facilitator's /supported lists it. */
 export type GasSponsoringMode = 'auto' | boolean;
 
 export const EIP2612_GAS_SPONSORING = 'eip2612GasSponsoring';
 
+let warnedDefaultSettle = false;
+
 /**
  * Server-side `exact` scheme for one network: prices in USD or its asset's atomic units, Permit2
  * or EIP-3009 transfer method, no dependency on @x402/evm (the facilitator does all the
  * cryptography). The transfer method is whichever the facilitator lists first for the network,
  * else EIP-3009 (x402's default, and what Base facilitators settle for USDC).
+ *
+ * `settle` picks the payment flow (see `SettleMode`). Omitting it means `'before'`, under which
+ * x402 core never calls `/verify`; pass it explicitly, as a server with its own verify, work and
+ * settle pipeline needs `'after'`.
  */
 export class RadiusExactScheme implements SchemeNetworkServer {
   readonly scheme = 'exact';
   readonly defaultAssetTransferMethod = 'eip3009';
+  /** The settle mode this scheme advertises: `'before'` is the `upfront` payment flow, `'after'` is `authorization`. */
+  readonly settle: SettleMode;
   readonly paymentFlows: SchemeNetworkServer['paymentFlows'];
   /**
    * `paymentFlow` is a server-side hint (when to settle relative to the handler).
@@ -34,14 +58,19 @@ export class RadiusExactScheme implements SchemeNetworkServer {
 
   constructor(
     private readonly network: PaymentNetwork,
-    settle: SettleMode = 'before',
+    settle?: SettleMode,
     private readonly gasSponsoring: GasSponsoringMode = 'auto',
   ) {
+    if (settle === undefined && !warnedDefaultSettle) {
+      warnedDefaultSettle = true;
+      console.warn("radius-sdk: RadiusExactScheme defaults settle to 'before', so x402 core skips /verify. Pass 'before' or 'after' explicitly.");
+    }
+    this.settle = settle ?? 'before';
     // Both transfer methods a facilitator may list; the one it names first for the network
     // is what the 402 advertises.
     const flows: SchemeNetworkServer['paymentFlows'][string] = {
       supported: ['authorization', 'upfront'],
-      default: settle === 'before' ? 'upfront' : 'authorization',
+      default: this.settle === 'before' ? 'upfront' : 'authorization',
     };
     this.paymentFlows = { permit2: flows, eip3009: flows };
   }

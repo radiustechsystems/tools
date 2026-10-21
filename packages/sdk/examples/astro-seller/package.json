@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@astrojs/node": "^11.1.7",
+    "@x402/core": "2.27.0",
     "astro": "^7.3.6",
     "radius-sdk": "workspace:*"
   },

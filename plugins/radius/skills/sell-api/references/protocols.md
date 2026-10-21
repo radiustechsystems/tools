@@ -29,6 +29,8 @@ What the SDK puts in each offer (`accepts[i]`), per network, per route:
 
 ## MPP
 
+The SDK implements one MPP method: `method="evm"`, `intent="charge"`, an EIP-3009 authorization settled through the x402 facilitator. It is **not** the Tempo method of `mppx`: a Tempo challenge has `method="tempo"` and a different `request` shape, the SDK seller never emits one, and `createRadiusFetch` and `radius-cli wallet pay` reject it (`no_compatible_offer`). So it is not a drop-in for a server whose MPP rail is Tempo/`mppx`. For that server, Radius is added over x402; MPP stays on Tempo (or `mppx`'s own `evm` method is added next to it).
+
 Enable it with `mpp` on `radiusPayments()` or `radius-sdk/hono`:
 
 ```typescript

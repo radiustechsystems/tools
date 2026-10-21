@@ -10,8 +10,8 @@ Tools and developer docs for the [Radius Network](https://radiustech.xyz), manag
 
 ```bash
 npx radius-cli wallet balance     # the CLI
-pnpm add radius-sdk               # SDK, seller side (add hono, or @x402/express + express, for those stacks)
-pnpm add radius-sdk viem          # SDK, buyer / agent side
+pnpm add radius-sdk @x402/core                  # SDK, seller side (add hono, or @x402/express + express, for those stacks)
+pnpm add radius-sdk @x402/core @x402/evm viem   # SDK, buyer / agent side
 ```
 
 Runnable SDK examples (seller workers with and without Hono, an Express seller, agent buyer, browser demo dapp) are in [`packages/sdk/examples`](./packages/sdk/examples).
