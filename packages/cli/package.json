@@ -1,6 +1,6 @@
 {
   "name": "radius-cli",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "CLI wallet for the Radius network \u2014 like cast, with a built-in account",
   "type": "module",
   "bin": {
