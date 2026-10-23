@@ -12,6 +12,7 @@ import { signJwt } from '../lib/jwt.js';
 import { parseTypedData } from '../lib/typedData.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
 import { formatUsd, formatUsdShort, jsonStringify } from '../lib/format.js';
+import { programStatus, shortHex } from '../lib/programStatus.js';
 import { registerWalletPay } from './walletPay.js';
 import type { GlobalOptions } from '../types.js';
 import { explorerTxUrl } from 'radius-sdk';
@@ -40,9 +41,13 @@ function normalizePrivateKey(input: string): Hex {
 
 async function readNewPassword(envPassword?: string): Promise<string> {
   if (envPassword !== undefined) return envPassword;
-  const first = await promptPassword({ message: 'New keystore password:', mask: '*' });
+  const first = await programStatus.whileBlocked('auth', 'New keystore password needed', () =>
+    promptPassword({ message: 'New keystore password:', mask: '*' }),
+  );
   if (first.length < 8) throw new Error('Password must be at least 8 characters.');
-  const second = await promptPassword({ message: 'Confirm password:', mask: '*' });
+  const second = await programStatus.whileBlocked('auth', 'New keystore password needed', () =>
+    promptPassword({ message: 'Confirm password:', mask: '*' }),
+  );
   if (first !== second) throw new Error('Passwords do not match.');
   return first;
 }
@@ -122,18 +127,27 @@ export function registerWallet(program: Command): void {
           `No keystore at ${cfg.keystorePath}. Run \`radius-cli wallet new\` or pass --private-key.`,
         );
       }
-      const ok = await confirm({
-        message: 'Print the raw private key to stdout?',
-        default: false,
-      });
-      if (!ok) return;
+      const ok = await programStatus.whileBlocked('permission', 'Confirm printing the private key', () =>
+        confirm({
+          message: 'Print the raw private key to stdout?',
+          default: false,
+        }),
+      );
+      if (!ok) {
+        programStatus.cancel('Export declined');
+        return;
+      }
 
       let pk: Hex;
       if (opts.privateKey) {
         pk = normalizePrivateKey(opts.privateKey);
       } else {
         const password = cfg.password
-          ?? (readPasswordless() ? '' : await promptPassword({ message: 'Keystore password:', mask: '*' }));
+          ?? (readPasswordless()
+            ? ''
+            : await programStatus.whileBlocked('auth', 'Keystore password needed', () =>
+              promptPassword({ message: 'Keystore password:', mask: '*' }),
+            ));
         pk = await loadKeystorePrivateKey(cfg.keystorePath, password);
       }
       const address = privateKeyToAccount(pk).address;
@@ -153,6 +167,8 @@ export function registerWallet(program: Command): void {
       const cfg = resolveConfig(opts);
       const network = radiusNetwork(cfg);
       const account = await requireAccount(cfg, opts.privateKey);
+      programStatus.working(`Requesting a faucet drip on ${network.name}`);
+      programStatus.succeeded('Received faucet drip');
       const { amount, txHash } = await createRadiusFetch({ networks: [network], signer: account, maxPerRequest: '0' }).fund();
       const explorerUrl = txHash ? explorerTxUrl(network, txHash) : undefined;
       if (opts.json) {
@@ -459,7 +475,9 @@ async function reportTx(
     else console.log(hash);
     return;
   }
+  programStatus.working(`Waiting for transaction ${shortHex(hash)}`);
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  programStatus.succeeded(receipt.status === 'success' ? 'Transaction confirmed' : 'Transaction reverted');
   if (opts.json) {
     console.log(jsonStringify({ hash, receipt }));
   } else {

@@ -10,6 +10,7 @@ import { registerSell } from './commands/sell.js';
 import { registerStorage } from './commands/storage.js';
 import { registerTx } from './commands/tx.js';
 import { registerWallet } from './commands/wallet.js';
+import { programStatus } from './lib/programStatus.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };
@@ -40,6 +41,8 @@ registerSell(program);
 async function main(): Promise<void> {
   await program.parseAsync(process.argv);
 }
+
+programStatus.install();
 
 main().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);

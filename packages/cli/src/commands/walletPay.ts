@@ -29,6 +29,7 @@ import {
   type HttpVerb,
 } from '../lib/http.js';
 import { decidePayment, type PayDecision } from '../lib/payPolicy.js';
+import { programStatus, shortHex } from '../lib/programStatus.js';
 import type { GlobalOptions } from '../types.js';
 
 interface SubOptions {
@@ -197,12 +198,18 @@ async function runPay(
       }
       if (decision === 'prompt') {
         const verbText = isUpto ? `Authorize up to ${amountStr}` : `Pay ${amountStr}`;
-        const proceed = await confirm({
-          message: `${verbText} ${symbol} on ${o.network.name} to ${o.payTo}? (balance: ${balance.formatted})`,
-          default: false,
-        });
+        const proceed = await programStatus.whileBlocked(
+          'permission',
+          `${verbText} ${symbol} on ${o.network.name} to ${shortHex(o.payTo)}?`,
+          () =>
+            confirm({
+              message: `${verbText} ${symbol} on ${o.network.name} to ${o.payTo}? (balance: ${balance.formatted})`,
+              default: false,
+            }),
+        );
         if (!proceed) {
           refusal = { kind: 'declined' };
+          programStatus.cancel('Payment declined');
           process.stderr.write('pay: payment declined.\n');
           return false;
         }
@@ -212,11 +219,13 @@ async function runPay(
         // only checks when it does not), so a facilitator that still answers 412 has a way out.
         const allowance = await wallet.permit2Allowance();
         if (allowance < amount) {
+          programStatus.working(`Granting Permit2 a ${symbol} approval on ${o.network.name}`);
           process.stderr.write(`pay: granting Permit2 an unlimited ${symbol} approval on ${o.network.name} (--approve-permit2)…\n`);
           const tx = await wallet.approvePermit2();
           process.stderr.write(`pay: approval confirmed (tx ${tx.hash})\n`);
         }
       }
+      programStatus.working(`${isUpto ? `Paying up to ${amountStr}` : `Paying ${amountStr}`} ${symbol} on ${o.network.name}`);
       return true;
     },
     onApprovalRequired: async (req: ApprovalRequest) => {
@@ -240,17 +249,25 @@ async function runPay(
         );
         return false;
       }
-      const proceed = await confirm({
-        message: sponsoredWhat
-          ? `Sign ${sponsoredWhat} for Permit2 (${req.spender}), submitted by the server's facilitator? ` +
-            `${need ? `This payment needs ${need}. ` : ''}Every payment still requires its own signed authorization.`
-          : `Grant Permit2 (${req.spender}) an unlimited ${symbol} approval? ` +
-            `One-time setup; ${need ? `this payment needs ${need}, and ` : ''}every payment still ` +
-            'requires its own signed authorization.',
-        default: false,
-      });
+      const proceed = await programStatus.whileBlocked(
+        'permission',
+        sponsoredWhat
+          ? `Sign a Permit2 approval for ${symbol} on ${req.network.name}?`
+          : `Approve Permit2 for ${symbol} on ${req.network.name}?`,
+        () =>
+          confirm({
+            message: sponsoredWhat
+              ? `Sign ${sponsoredWhat} for Permit2 (${req.spender}), submitted by the server's facilitator? ` +
+                `${need ? `This payment needs ${need}. ` : ''}Every payment still requires its own signed authorization.`
+              : `Grant Permit2 (${req.spender}) an unlimited ${symbol} approval? ` +
+                `One-time setup; ${need ? `this payment needs ${need}, and ` : ''}every payment still ` +
+                'requires its own signed authorization.',
+            default: false,
+          }),
+      );
       if (!proceed) {
         refusal = { kind: 'approval-declined' };
+        programStatus.cancel('Permit2 approval declined');
         process.stderr.write('pay: Permit2 approval declined.\n');
       }
       return proceed;
@@ -314,6 +331,7 @@ async function runPay(
     );
   }
 
+  if (summary.paid) programStatus.succeeded(`Paid ${summary.amount} ${summary.assetSymbol ?? shortHex(summary.asset)}`);
   emit(paid, summary, !!opts.json, !!subOpts.include);
   process.exit(paid.status >= 400 ? 1 : 0);
 }

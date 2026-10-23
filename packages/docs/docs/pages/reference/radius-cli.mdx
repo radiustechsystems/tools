@@ -266,6 +266,22 @@ radius-cli --json sell check http://localhost:8787/api/lookup --probe-head
 
 The command prints one line per check (`ok`, `warn`, `FAIL`, `skip`, `info`); with `--json`, stdout is one object with `ok`, `offers`, `mpp`, `facilitators`, `checks` and `summary`. It exits `0` when no check failed, `1` when one did, and `2` on invalid flags (a malformed `-H`, an unreadable `-d @file`, an unknown `--network`, a bad `--price` or `--threshold`).
 
+## Terminal status
+
+`radius-cli` reports what it is waiting on with the [Program Status Protocol](https://gist.github.com/mitchellh/7acae3abd8355c1c00287d67e96c913a) (OSC 7501). A terminal that supports it can show that a tab in the background needs you, for example while `wallet pay` asks to confirm a payment.
+
+| When                                                                                                | Status                   |
+| --------------------------------------------------------------------------------------------------- | ------------------------ |
+| A keystore password prompt is open                                                                  | `blocked` (`auth`)       |
+| `wallet pay` asks to confirm a payment or a Permit2 approval; `wallet export` asks to print the key | `blocked` (`permission`) |
+| `wallet pay` is paying, `wallet send` waits for its receipt, `wallet faucet` waits for a drip       | `working`                |
+| You decline or cancel a prompt                                                                      | `idle`                   |
+| A run that reported `working` exits                                                                 | `done` or `error`        |
+
+Messages name only the amount, asset, network and a shortened payee address, never text from the server. Commands that wait on nothing, such as `call` or `wallet address`, report nothing.
+
+The CLI writes these reports to stderr only when stderr is a terminal, so `--json` output, pipes and CI logs never contain them. Terminals without support ignore them. Set `RADIUS_NO_PROGRAM_STATUS=1` to turn them off; they are also off when `CI` is set or `TERM=dumb`.
+
 ## When to use other tools
 
 | Task                                       | Preferred tool                           |
