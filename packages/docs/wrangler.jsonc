@@ -1,5 +1,6 @@
 // Cloudflare Worker for docs.radiustech.xyz: Workers static assets serve the built site from
-// dist/public (including public/_redirects and public/_headers); worker/index.ts handles /api/try/* only.
+// dist/public (including public/_redirects and public/_headers); worker/index.ts handles /api/try/*, and
+// serves pages and agent files so it can record agent requests (see run_worker_first).
 // Deployed by .github/workflows/docs-deploy.yml, never from a laptop.
 // Ref: https://developers.cloudflare.com/workers/static-assets/
 {
@@ -13,17 +14,11 @@
   "assets": {
     "directory": "./dist/public",
     "binding": "ASSETS",
-    // /api/try/* is the Worker's own API. The rest are the files agents fetch: worker/index.ts serves them
-    // from static assets unchanged and records each request, because browser analytics never see agents.
-    "run_worker_first": [
-      "/api/try/*",
-      "/*.md",
-      "/llms.txt",
-      "/llms-full.txt",
-      "/robots.txt",
-      "/sitemap.xml",
-      "/sitemap.txt",
-    ],
+    // /api/try/* is the Worker's own API. Every other path reaches the Worker too, except scripts, styles and
+    // images: worker/index.ts serves pages and agent files from static assets, gives a page's Markdown twin to
+    // requests that prefer Markdown, and records agent requests, because browser analytics never see agents.
+    // Exclusions win over "/*"; keep them in step with what dist/public contains.
+    "run_worker_first": ["/*", "!/assets/*", "!/RSC/*", "!/imgs/*", "!/og/*", "!/*.svg", "!/*.png", "!/favicon.ico"],
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page",
   },
@@ -35,13 +30,13 @@
   "vars": {
     "TRY_PAY_TO": "0x0fD9Ba4a476C7f544cC9b04e54D6B7bb53F2f568",
   },
-  // One data point per agent-file fetch (worker/index.ts documents the columns). Query it with the
+  // One data point per agent request (worker/index.ts documents the columns). Query it with the
   // Analytics Engine SQL API (`SELECT ... FROM docs_agent_fetches`) and an Account Analytics: Read token.
   "analytics_engine_datasets": [{ "binding": "AGENT_FETCHES", "dataset": "docs_agent_fetches" }],
   // No "routes": the docs.radiustech.xyz custom domain is attached in the Cloudflare dashboard. `wrangler deploy`
   // calls the custom-domains API only for custom_domain routes listed here, so it leaves that domain alone and
   // the CI token needs no zone or DNS permissions. Don't add the domain back here without granting those.
-  // Workers Logs: one invocation log per request that reaches the Worker, plus the "agent file" line from
+  // Workers Logs: one invocation log per request that reaches the Worker, plus the "agent fetch" line from
   // worker/index.ts. Query them under Workers & Pages > radius-docs > Observability.
   "observability": {
     "logs": {
