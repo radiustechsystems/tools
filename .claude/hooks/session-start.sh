@@ -14,5 +14,9 @@ export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 corepack enable pnpm
 echo 'export COREPACK_ENABLE_DOWNLOAD_PROMPT=0' >> "$CLAUDE_ENV_FILE"
 
-pnpm install
+# A resumed container already has node_modules; a no-op install still re-verifies all of it
+# (6s warm, 25s on a cold page cache). Install only when the lockfile is newer than the tree.
+if [ ! -f node_modules/.modules.yaml ] || [ pnpm-lock.yaml -nt node_modules/.modules.yaml ]; then
+  pnpm install --frozen-lockfile
+fi
 pnpm build
