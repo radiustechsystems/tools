@@ -14,7 +14,7 @@
     "directory": "./dist/public",
     "binding": "ASSETS",
     // /api/try/* is the Worker's own API. The rest are the files agents fetch: worker/index.ts serves them
-    // from static assets unchanged and logs each request, because browser analytics never see agents.
+    // from static assets unchanged and records each request, because browser analytics never see agents.
     "run_worker_first": [
       "/api/try/*",
       "/*.md",
@@ -35,6 +35,9 @@
   "vars": {
     "TRY_PAY_TO": "0x0fD9Ba4a476C7f544cC9b04e54D6B7bb53F2f568",
   },
+  // One data point per agent-file fetch (worker/index.ts documents the columns). Query it with the
+  // Analytics Engine SQL API (`SELECT ... FROM docs_agent_fetches`) and an Account Analytics: Read token.
+  "analytics_engine_datasets": [{ "binding": "AGENT_FETCHES", "dataset": "docs_agent_fetches" }],
   // No "routes": the docs.radiustech.xyz custom domain is attached in the Cloudflare dashboard. `wrangler deploy`
   // calls the custom-domains API only for custom_domain routes listed here, so it leaves that domain alone and
   // the CI token needs no zone or DNS permissions. Don't add the domain back here without granting those.
