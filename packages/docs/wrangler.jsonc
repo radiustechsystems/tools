@@ -13,7 +13,17 @@
   "assets": {
     "directory": "./dist/public",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/try/*"],
+    // /api/try/* is the Worker's own API. The rest are the files agents fetch: worker/index.ts serves them
+    // from static assets unchanged and logs each request, because browser analytics never see agents.
+    "run_worker_first": [
+      "/api/try/*",
+      "/*.md",
+      "/llms.txt",
+      "/llms-full.txt",
+      "/robots.txt",
+      "/sitemap.xml",
+      "/sitemap.txt",
+    ],
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page",
   },
@@ -28,10 +38,13 @@
   // No "routes": the docs.radiustech.xyz custom domain is attached in the Cloudflare dashboard. `wrangler deploy`
   // calls the custom-domains API only for custom_domain routes listed here, so it leaves that domain alone and
   // the CI token needs no zone or DNS permissions. Don't add the domain back here without granting those.
+  // Workers Logs: one invocation log per request that reaches the Worker, plus the "agent file" line from
+  // worker/index.ts. Query them under Workers & Pages > radius-docs > Observability.
   "observability": {
     "logs": {
-      "enabled": false,
+      "enabled": true,
       "invocation_logs": true,
+      "head_sampling_rate": 1,
     },
   },
 }

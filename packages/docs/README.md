@@ -22,7 +22,7 @@ CI (`.github/workflows/docs.yml`) runs format, lint, typecheck, the validators a
 
 ## Hosting and releases
 
-The site is a Cloudflare Worker (`wrangler.jsonc`): Workers static assets serve `dist/public`, including `public/_redirects` and `public/_headers` (`noindex` on `workers.dev` hosts, so previews and the pre-cutover site stay out of search results), and `worker/index.ts` handles `/api/try/*`, the backend of the interactive "Try Radius" components (a testnet faucet proxy and priced testnet routes built with `radius-sdk/hono`).
+The site is a Cloudflare Worker (`wrangler.jsonc`): Workers static assets serve `dist/public`, including `public/_redirects` and `public/_headers` (`noindex` on `workers.dev` hosts, so previews and the pre-cutover site stay out of search results), and `worker/index.ts` handles `/api/try/*`, the backend of the interactive "Try Radius" components (a testnet faucet proxy and priced testnet routes built with `radius-sdk/hono`). The agent-facing files (`*.md`, `llms.txt`, `llms-full.txt`, `robots.txt`, sitemaps) also pass through the Worker, which serves them unchanged and logs each fetch to Workers Logs: browser analytics never see agents.
 
 Production follows releases, not `main`, so the docs never describe a package version that is not on npm. `.github/workflows/docs-deploy.yml` builds and deploys, then moves the `docs-live` tag to the deployed commit:
 

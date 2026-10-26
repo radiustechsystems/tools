@@ -125,7 +125,7 @@ packages/docs/
 │   ├── components/               # Custom React components (+ *-data.ts sources)
 │   ├── constants.ts              # Network constants used in MDX and generated Markdown
 │   └── remark-llm-output.ts      # Output-only remark plugin for agent Markdown
-├── worker/index.ts               # Worker entry: /api/try/* for the "Try Radius" components
+├── worker/index.ts               # Worker entry: /api/try/* ("Try Radius") and agent-file logging
 ├── public/                       # Static assets (logos, robots.txt, _redirects, _headers, generated skills/sitemap)
 ├── scripts/                      # Build utilities (skills, sitemap, tx cost, postbuild mirror, validators)
 ├── vocs.config.ts                # Site configuration
@@ -165,7 +165,7 @@ Network values (chain IDs, RPC URLs, asset names and decimals, contract addresse
 
 ## Deployment
 
-The site is the `radius-docs` Cloudflare Worker (`wrangler.jsonc`). Workers static assets serve `dist/public`, including `public/_redirects` and `public/_headers` (which marks every `workers.dev` host, previews included, `noindex`); `worker/index.ts` handles `/api/try/*` only (`assets.run_worker_first`): the backend of the interactive "Try Radius" components (`docs/components/try/`, used on `/try`), a testnet faucet proxy (the faucet API sends no CORS headers) and priced testnet routes built with `radius-sdk/hono`. Payments go to `TRY_PAY_TO` in `wrangler.jsonc`. Run it locally with `pnpm build && pnpm wrangler dev`; `vocs dev` serves the pages only, so the components' API calls fail there.
+The site is the `radius-docs` Cloudflare Worker (`wrangler.jsonc`). Workers static assets serve `dist/public`, including `public/_redirects` and `public/_headers` (which marks every `workers.dev` host, previews included, `noindex`); `worker/index.ts` runs only for the paths in `assets.run_worker_first`. Under `/api/try/*` it is the backend of the interactive "Try Radius" components (`docs/components/try/`, used on `/try`), a testnet faucet proxy (the faucet API sends no CORS headers) and priced testnet routes built with `radius-sdk/hono`. Payments go to `TRY_PAY_TO` in `wrangler.jsonc`. For the agent-facing files (`*.md`, `llms.txt`, `llms-full.txt`, `robots.txt`, sitemaps) it serves the static asset unchanged and logs one `agent file` line per request to Workers Logs (no IP, query string or body), because Cloudflare Web Analytics only counts browsers that run its script. Keep HTML pages asset-first: browsers are already counted, and every Worker invocation is billed. Run it locally with `pnpm build && pnpm wrangler dev`; `vocs dev` serves the pages only, so the components' API calls fail there.
 
 The `docs.radiustech.xyz` custom domain is managed in the Cloudflare dashboard, not in `wrangler.jsonc`: listing it there makes `wrangler deploy` call the custom-domains API, which needs zone and DNS permissions the CI token deliberately lacks.
 
