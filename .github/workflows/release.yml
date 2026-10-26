@@ -59,6 +59,8 @@ jobs:
     if: needs.select-mode.outputs.mode == 'version'
     needs: select-mode
     runs-on: ubuntu-latest
+    env:
+      CHANGESETS_APP_ID: ${{ secrets.CHANGESETS_APP_ID }} # `secrets` is not available in a step `if`
     permissions:
       contents: write # to commit version changes (changesets/action/version)
       pull-requests: write # to create the pull request (changesets/action/version)
@@ -80,9 +82,24 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # A PR pushed with the default GITHUB_TOKEN never triggers `pull_request` workflows, so the Version
+      # Packages PR would carry none of the checks the `main` ruleset requires and could not be merged.
+      # With the CHANGESETS_APP_ID + CHANGESETS_APP_PRIVATE_KEY secrets (a GitHub App installed on this
+      # repository with Contents and Pull requests write), the branch and PR are opened as that App and CI
+      # runs on them; CHANGESETS_GITHUB_TOKEN (a fine-grained PAT) does the same as a person. Without
+      # either, this falls back to the default token (see README.md, "Releasing").
+      - name: Create GitHub App token
+        id: app-token
+        if: env.CHANGESETS_APP_ID != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CHANGESETS_APP_ID }}
+          private-key: ${{ secrets.CHANGESETS_APP_PRIVATE_KEY }}
+
       - name: Version packages
         uses: changesets/action/version@v2
         with:
+          github-token: ${{ steps.app-token.outputs.token || secrets.CHANGESETS_GITHUB_TOKEN || github.token }}
           # `changeset version` plus a lockfile refresh, so `pnpm install --frozen-lockfile` keeps passing
           script: pnpm version-packages
           commit-message: 'chore: version packages'

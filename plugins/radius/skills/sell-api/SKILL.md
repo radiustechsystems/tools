@@ -36,22 +36,22 @@ Read `package.json` (and the entry file) and pick the wrapper. Details and full 
 
 | The project uses | Seller API | Install | MPP |
 | --- | --- | --- | --- |
-| Hono (incl. on Workers, Bun, Node via `@hono/node-server`) | `radiusPayments` from `radius-sdk/hono`, as `app.use(...)` | `radius-sdk hono` | yes |
-| No framework: Workers `fetch`, Bun/Deno `serve`, Node 22 `Request`/`Response`, SvelteKit / Remix route handlers, Next.js / Astro API routes | `radiusPayments` from `radius-sdk/server`: `pay.wrap(handler)` or `pay(request, handler)` | `radius-sdk` | yes |
-| Next.js pages or articles (`middleware.ts` on Next 15, `proxy.ts` on Next 16; edge or Node runtime) | `radiusPayments` in the middleware: `pay(publicRequest(req), () => NextResponse.next())` | `radius-sdk` | yes |
-| Astro with a server adapter (`astro.config.*` with `output: 'server'` or an adapter) | `radiusPayments` in `src/middleware.ts`, **with the prerender guard**. Prerendered pages are not gated | `radius-sdk` | yes |
-| A CMS or site you cannot change, behind Cloudflare (`wrangler.toml`) | A Worker in front of the origin: `pay(request, () => fetch(origin))` | `radius-sdk` | yes |
-| An origin you cannot change (any language), without Cloudflare | A Hono proxy on Node in front of it: gated routes, `app.all('/*')` passes the rest through | `radius-sdk hono @hono/node-server` | yes |
-| Fastly Compute (`fastly.toml`) | The same, with an `AbortSignal` shim (hand-tested only). Fastly VCL-only services cannot run it: gate in the origin framework | `radius-sdk` | yes |
-| Express | `createRadiusServer` from `radius-sdk/server` + `paymentMiddleware` from `@x402/express` | `radius-sdk @x402/express express` | no |
-| Next.js 16.2.6 or later, x402 only | `createRadiusServer` + `@x402/next` (**not covered by this repo's tests**; on Next 15 it cannot be used) | `radius-sdk @x402/next` | no |
+| Hono (incl. on Workers, Bun, Node via `@hono/node-server`) | `radiusPayments` from `radius-sdk/hono`, as `app.use(...)` | `radius-sdk @x402/core hono` | yes |
+| No framework: Workers `fetch`, Bun/Deno `serve`, Node 22 `Request`/`Response`, SvelteKit / Remix route handlers, Next.js / Astro API routes | `radiusPayments` from `radius-sdk/server`: `pay.wrap(handler)` or `pay(request, handler)` | `radius-sdk @x402/core` | yes |
+| Next.js pages or articles (`middleware.ts` on Next 15, `proxy.ts` on Next 16; edge or Node runtime) | `radiusPayments` in the middleware: `pay(publicRequest(req), () => NextResponse.next())` | `radius-sdk @x402/core` | yes |
+| Astro with a server adapter (`astro.config.*` with `output: 'server'` or an adapter) | `radiusPayments` in `src/middleware.ts`, **with the prerender guard**. Prerendered pages are not gated | `radius-sdk @x402/core` | yes |
+| A CMS or site you cannot change, behind Cloudflare (`wrangler.toml`) | A Worker in front of the origin: `pay(request, () => fetch(origin))` | `radius-sdk @x402/core` | yes |
+| An origin you cannot change (any language), without Cloudflare | A Hono proxy on Node in front of it: gated routes, `app.all('/*')` passes the rest through | `radius-sdk @x402/core hono @hono/node-server` | yes |
+| Fastly Compute (`fastly.toml`) | The same, with an `AbortSignal` shim (hand-tested only). Fastly VCL-only services cannot run it: gate in the origin framework | `radius-sdk @x402/core` | yes |
+| Express | `createRadiusServer` from `radius-sdk/server` + `paymentMiddleware` from `@x402/express` | `radius-sdk @x402/core @x402/express express` | no |
+| Next.js 16.2.6 or later, x402 only | `createRadiusServer` + `@x402/next` (**not covered by this repo's tests**; on Next 15 it cannot be used) | `radius-sdk @x402/core @x402/next` | no |
 | Anything else | Ask, or put a web-standard handler in front (`radius-sdk/server`) | | |
 
 Content sites: the gate must run before any CDN cache, and charge only pages that exist ([publishers.md](references/publishers.md)). Decide who pays: every request that matches a route, or only agents (a condition wrapper, section 2 there).
 
 ### 2. Install
 
-Use the project's package manager (`pnpm add`, `npm install`, …) with the packages from the table. The seller entry points do not need `viem` at runtime. If you cannot install packages, use only what `package.json` already lists.
+Use the project's package manager (`pnpm add`, `npm install`, …) with the packages from the table. `@x402/core` is a required peer dependency of `radius-sdk` 0.7.0 and later: name it so every package manager installs it, and keep it on the same version as any other `@x402/*` package in the app. The seller entry points do not need `viem` or `@x402/evm` at runtime. If you cannot install packages, use only what `package.json` already lists.
 
 ### 3. Configure
 
