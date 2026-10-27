@@ -4,8 +4,10 @@ dist/
 .vocs/
 tmp/
 
-# Generated at build time (scripts/generate-skills-md.ts, scripts/generate-sitemap.ts)
+# Generated at build time (scripts/generate-skills-md.ts, scripts/generate-sitemap.ts,
+# scripts/generate-release-notes.ts)
 public/skills/
+docs/pages/release-notes.mdx
 public/sitemap.txt
 public/*.xml
 

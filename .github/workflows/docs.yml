@@ -1,7 +1,8 @@
 name: Docs
 
 # Checks packages/docs on every pull request and push to main that can change the built site: the docs
-# themselves, the SDK they import, the skills they publish under /skills/, and the lockfile.
+# themselves, the SDK they import, the skills they publish under /skills/, the changelogs the release
+# notes are built from, and the lockfile.
 # Same-repo pull requests also get a preview: a Worker version uploaded under the alias pr-<number>.
 # Production deploys are not done here; see docs-deploy.yml.
 on:
@@ -9,6 +10,7 @@ on:
     paths:
       - packages/docs/**
       - packages/sdk/**
+      - packages/cli/CHANGELOG.md
       - plugins/radius/**
       - .claude-plugin/**
       - pnpm-lock.yaml
@@ -18,6 +20,7 @@ on:
     paths:
       - packages/docs/**
       - packages/sdk/**
+      - packages/cli/CHANGELOG.md
       - plugins/radius/**
       - .claude-plugin/**
       - pnpm-lock.yaml
@@ -43,6 +46,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Release notes list a radius-sdk / radius-cli version once its release tag exists, dated by
+          # the tag; docs-deploy.yml checks out the same way.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
@@ -74,6 +81,9 @@ jobs:
 
       - name: Test flat skill generation
         run: pnpm test:skills
+
+      - name: Test release notes generation
+        run: pnpm test:release-notes
 
       - name: Markdown audit
         run: pnpm docs:markdown-audit

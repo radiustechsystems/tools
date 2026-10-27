@@ -126,8 +126,9 @@ packages/docs/
 │   ├── constants.ts              # Network constants used in MDX and generated Markdown
 │   └── remark-llm-output.ts      # Output-only remark plugin for agent Markdown
 ├── worker/index.ts               # Worker entry: /api/try/* ("Try Radius"), Markdown negotiation, agent logging
-├── public/                       # Static assets (logos, robots.txt, _redirects, _headers, generated skills/sitemap)
-├── scripts/                      # Build utilities (skills, sitemap, tx cost, postbuild mirror, validators)
+├── public/                       # Static assets (logos, robots.txt, _redirects, _headers, generated skills/sitemap/feed)
+├── release-notes/network.md      # Radius Network release notes, by hand (see Release notes)
+├── scripts/                      # Build utilities (skills, sitemap, release notes, tx cost, postbuild mirror, validators)
 ├── vocs.config.ts                # Site configuration
 ├── wrangler.jsonc                # Worker, static assets, TRY_PAY_TO, logs, Analytics Engine
 ├── CLAUDE.md                     # This file
@@ -165,12 +166,24 @@ Network values (chain IDs, RPC URLs, asset names and decimals, contract addresse
 
 ## Deployment
 
-The site is the `radius-docs` Cloudflare Worker (`wrangler.jsonc`). Workers static assets serve `dist/public`, including `public/_redirects` and `public/_headers` (which marks every `workers.dev` host, previews included, `noindex`); `worker/index.ts` runs only for the paths in `assets.run_worker_first`. Under `/api/try/*` it is the backend of the interactive "Try Radius" components (`docs/components/try/`, used on `/try`), a testnet faucet proxy (the faucet API sends no CORS headers) and priced testnet routes built with `radius-sdk/hono`. Payments go to `TRY_PAY_TO` in `wrangler.jsonc`. Every other path except scripts, styles and images (excluded in `run_worker_first`) also reaches it, because Cloudflare Web Analytics only counts browsers that run its script. It serves pages and agent-facing files (`*.md`, `llms.txt`, `llms-full.txt`, `robots.txt`, sitemaps) from static assets, serves a page's Markdown twin to requests whose `Accept` header prefers `text/markdown`, and records agent requests twice: an `agent fetch` line in Workers Logs (kept 3 to 7 days, for debugging) and a data point in the `docs_agent_fetches` Analytics Engine dataset (for weekly KPIs; `worker/index.ts` documents its columns, which are append-only, including the host to filter previews out). A request is recorded when it negotiated Markdown or has no `Sec-Fetch-Mode` header, which every current browser sends, including on the page's own fetch of its `.md` twin (PageActions prefetches it on every page view). Neither record holds an IP address, query string or body. New static asset folders or file types go in the `run_worker_first` exclusions, so they stay asset-first: every Worker invocation is billed. Run it locally with `pnpm build && pnpm wrangler dev`; `vocs dev` serves the pages only, so the components' API calls fail there.
+The site is the `radius-docs` Cloudflare Worker (`wrangler.jsonc`). Workers static assets serve `dist/public`, including `public/_redirects` and `public/_headers` (which marks every `workers.dev` host, previews included, `noindex`); `worker/index.ts` runs only for the paths in `assets.run_worker_first`. Under `/api/try/*` it is the backend of the interactive "Try Radius" components (`docs/components/try/`, used on `/try`), a testnet faucet proxy (the faucet API sends no CORS headers) and priced testnet routes built with `radius-sdk/hono`. Payments go to `TRY_PAY_TO` in `wrangler.jsonc`. Every other path except scripts, styles and images (excluded in `run_worker_first`) also reaches it, because Cloudflare Web Analytics only counts browsers that run its script. It serves pages and agent-facing files (`*.md`, `llms.txt`, `llms-full.txt`, `robots.txt`, sitemaps, `release-notes.xml`) from static assets, serves a page's Markdown twin to requests whose `Accept` header prefers `text/markdown`, and records agent requests twice: an `agent fetch` line in Workers Logs (kept 3 to 7 days, for debugging) and a data point in the `docs_agent_fetches` Analytics Engine dataset (for weekly KPIs; `worker/index.ts` documents its columns, which are append-only, including the host to filter previews out). A request is recorded when it negotiated Markdown or has no `Sec-Fetch-Mode` header, which every current browser sends, including on the page's own fetch of its `.md` twin (PageActions prefetches it on every page view). Neither record holds an IP address, query string or body. New static asset folders or file types go in the `run_worker_first` exclusions, so they stay asset-first: every Worker invocation is billed. Run it locally with `pnpm build && pnpm wrangler dev`; `vocs dev` serves the pages only, so the components' API calls fail there.
 
 The `docs.radiustech.xyz` custom domain is managed in the Cloudflare dashboard, not in `wrangler.jsonc`: listing it there makes `wrangler deploy` call the custom-domains API, which needs zone and DNS permissions the CI token deliberately lacks.
 
 - `.github/workflows/docs.yml`: format, lint, typecheck, validators, build, `docs:agent-check` and `docs:sitemap-check` on pull requests; same-repo pull requests get a preview Worker version (`pr-<number>` alias, URL commented on the PR).
 - `.github/workflows/docs-deploy.yml`: production. Called by `release.yml` after every npm publish, or run by hand for a docs-only release (refused while `radius-sdk`/`radius-cli` changesets are pending). Moves the `docs-live` tag to the deployed commit; it refuses to deploy a ref that does not contain `docs-live`'s commits. Live fee constants are fetched (`pnpm fetch-cost`) only there.
+
+---
+
+## Release notes
+
+`docs/pages/release-notes.mdx` and the Atom feed `public/release-notes.xml` are generated (and gitignored) by `scripts/generate-release-notes.ts`, which `prebuild`, `predev`, `docs:validate` and `docs:markdown-audit` run. Do not edit the page; edit its sources:
+
+- **Radius Network:** `release-notes/network.md`, by hand. `## <YYYY-MM-DD> (<build>)` per release; the text is MDX.
+- **radius-sdk, radius-cli:** their `CHANGELOG.md`, written by Changesets. A version is listed once its `<package>@<version>` git tag exists, dated by the tag, so the docs never announce a version that is not on npm. The generator fails when a checkout has no such tags: CI checks out with `fetch-depth: 0` and `fetch-tags: true`.
+- **Radius skills:** `plugins/radius/CHANGELOG.md`, one `## <version> (<YYYY-MM-DD>)` entry per plugin version bump.
+
+Each release is a `## <date>: <product> <version>` heading, so its anchor (`#2026-10-15-radius-sdk-060`) is a stable link to share. Each change's first sentence is bolded as its headline, and the page description names the latest release for link previews and `llms.txt`. Production picks up new entries on the next docs deploy: after every npm release, or a docs-only deploy run by hand.
 
 ---
 

@@ -1,11 +1,9 @@
----
-title: Release notes
-description: Read the latest Radius release notes, including product updates, feature launches, fixes, and important developer changes.
----
-
-# Release notes [Latest product and developer changes]
-
-Latest changes to the Radius Network. New features, improvements and bug fixes will be posted here.
+<!--
+Radius Network release notes, written by hand, newest first. scripts/generate-release-notes.ts merges
+them with the radius-sdk, radius-cli and Radius skills changelogs into docs/pages/release-notes.mdx.
+Start each release with `## <YYYY-MM-DD> (<build>)`; `###` and `####` headings group its changes.
+The text is rendered as MDX: escape `{`, `}` and `<` outside code.
+-->
 
 ## 2026-09-28 (099a1b5b)
 
