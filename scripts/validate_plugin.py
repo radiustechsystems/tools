@@ -45,6 +45,23 @@ def check_release_version(base_ref, current_version):
     )
 
 
+def check_changelog(current_version):
+    # The docs release notes are built from this file, so every released version needs an entry.
+    changelog = PLUGIN / "CHANGELOG.md"
+    assert changelog.is_file(), "plugin CHANGELOG.md missing"
+    content = changelog.read_text(encoding="utf-8")
+    entries = re.findall(r"^## (\S+) \((\d{4}-\d{2}-\d{2})\)$", content, re.MULTILINE)
+    headings = re.findall(r"^## .*$", content, re.MULTILINE)
+    assert len(entries) == len(headings), "plugin CHANGELOG.md headings must read `## <version> (<YYYY-MM-DD>)`"
+    versions = [version_tuple(version) for version, _ in entries]
+    assert versions == sorted(set(versions), reverse=True), "plugin CHANGELOG.md versions must be unique, newest first"
+    dates = [date for _, date in entries]
+    assert dates == sorted(dates, reverse=True), "plugin CHANGELOG.md dates must be newest first"
+    assert current_version in [version for version, _ in entries], (
+        f"plugin {current_version} has no entry in plugins/radius/CHANGELOG.md"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-ref", help="require a plugin version bump for release content changed since this ref")
@@ -61,6 +78,7 @@ def main():
     version_tuple(manifest["version"])
     assert (PLUGIN / "README.md").is_file(), "plugin README missing"
     assert manifest["license"] == "MIT"
+    check_changelog(manifest["version"])
     if args.base_ref:
         check_release_version(args.base_ref, manifest["version"])
 

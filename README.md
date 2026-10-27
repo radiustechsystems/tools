@@ -27,7 +27,8 @@ The [Radius Claude Code plugin](plugins/radius) contains the `radius-dev`, `x402
 [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json). These files
 live outside `packages/*`. The plugin has its own version in
 [`plugins/radius/.claude-plugin/plugin.json`](plugins/radius/.claude-plugin/plugin.json)
-and does not enter the npm Changesets release flow. The marketplace's
+and does not enter the npm Changesets release flow. Each version bump adds an entry to
+[`plugins/radius/CHANGELOG.md`](plugins/radius/CHANGELOG.md), which the docs release notes are built from. The marketplace's
 `metadata.version` describes the catalog, not the plugin; the marketplace entry
 does not duplicate the plugin version.
 
