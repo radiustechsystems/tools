@@ -2,3 +2,7 @@
 # only docs.radiustech.xyz should be indexed.
 https://:worker.:account.workers.dev/*
   X-Robots-Tag: noindex
+
+# The release notes feed (scripts/generate-release-notes.ts) is Atom, not generic XML.
+/release-notes.xml
+  Content-Type: application/atom+xml; charset=utf-8

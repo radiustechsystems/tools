@@ -56,8 +56,8 @@ app.get('/api/try/hello', (c) => c.json({ message: 'Hello, world!' }));
 
 app.notFound((c) => c.json({ error: 'not found' }, 404));
 
-// Files written for agents.
-const AGENT_FILE = /\.md$|^\/(?:llms\.txt|llms-full\.txt|robots\.txt|sitemap\.xml|sitemap\.txt)$/;
+// Files written for agents and feed readers.
+const AGENT_FILE = /\.md$|^\/(?:llms\.txt|llms-full\.txt|robots\.txt|sitemap\.xml|sitemap\.txt|release-notes\.xml)$/;
 
 // A page URL: no file extension in the last segment (`/`, `/build/`, `/build/x402`).
 const PAGE = /(?:^|\/)[^/.]*$/;

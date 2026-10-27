@@ -6,23 +6,23 @@ Source of [docs.radiustech.xyz](https://docs.radiustech.xyz), built with [Vocs](
 
 Run from `packages/docs` (Node 22.15+, pnpm). Build the SDK once first: `pnpm --filter radius-sdk build` (the docs resolve it from its `dist/`).
 
-| Command                    | Description                                                                    |
-| -------------------------- | ------------------------------------------------------------------------------ |
-| `pnpm dev`                 | Development server at `http://localhost:5173` (pages only, no `/api/try`)      |
-| `pnpm build`               | Generate skills and sitemap, build to `dist/public`, mirror Markdown twins     |
-| `pnpm wrangler dev`        | After a build: serve the site and the Worker (`/api/try/*`) like production    |
-| `pnpm typecheck:docs`      | Type-check the site, scripts and Worker                                        |
-| `pnpm docs:validate`       | Frontmatter, links, headings and JSON blocks in `docs/pages`                   |
-| `pnpm docs:markdown-audit` | Fail if an MDX component would be left unrendered in agent Markdown            |
-| `pnpm docs:agent-check`    | After a build: fail on unparsed callouts or `.md` links with no file           |
-| `pnpm docs:sitemap-check`  | After a build: validate `sitemap.xml`                                          |
-| `pnpm fetch-cost`          | Refresh the fee constants in `docs/constants.ts` (the deploy workflow does it) |
+| Command                    | Description                                                                      |
+| -------------------------- | -------------------------------------------------------------------------------- |
+| `pnpm dev`                 | Development server at `http://localhost:5173` (pages only, no `/api/try`)        |
+| `pnpm build`               | Generate skills, release notes and sitemap, build to `dist/public`, mirror twins |
+| `pnpm wrangler dev`        | After a build: serve the site and the Worker (`/api/try/*`) like production      |
+| `pnpm typecheck:docs`      | Type-check the site, scripts and Worker                                          |
+| `pnpm docs:validate`       | Frontmatter, links, headings and JSON blocks in `docs/pages`                     |
+| `pnpm docs:markdown-audit` | Fail if an MDX component would be left unrendered in agent Markdown              |
+| `pnpm docs:agent-check`    | After a build: fail on unparsed callouts or `.md` links with no file             |
+| `pnpm docs:sitemap-check`  | After a build: validate `sitemap.xml`                                            |
+| `pnpm fetch-cost`          | Refresh the fee constants in `docs/constants.ts` (the deploy workflow does it)   |
 
 CI (`.github/workflows/docs.yml`) runs format, lint, typecheck, the validators and the build on every pull request that touches the docs, the SDK or the skills, and uploads a preview version of the Worker for same-repo pull requests.
 
 ## Hosting and releases
 
-The site is a Cloudflare Worker (`wrangler.jsonc`): Workers static assets serve `dist/public`, including `public/_redirects` and `public/_headers` (`noindex` on `workers.dev` hosts, so previews and the pre-cutover site stay out of search results), and `worker/index.ts` handles `/api/try/*`, the backend of the interactive "Try Radius" components (a testnet faucet proxy and priced testnet routes built with `radius-sdk/hono`). Pages and the agent-facing files (`*.md`, `llms.txt`, `llms-full.txt`, `robots.txt`, sitemaps) also pass through the Worker, which serves them from static assets, gives a page's Markdown twin to requests that ask for `text/markdown`, and records agent requests in Workers Logs and the `docs_agent_fetches` Analytics Engine dataset: browser analytics never see agents. Scripts, styles and images stay asset-first.
+The site is a Cloudflare Worker (`wrangler.jsonc`): Workers static assets serve `dist/public`, including `public/_redirects` and `public/_headers` (`noindex` on `workers.dev` hosts, so previews and the pre-cutover site stay out of search results), and `worker/index.ts` handles `/api/try/*`, the backend of the interactive "Try Radius" components (a testnet faucet proxy and priced testnet routes built with `radius-sdk/hono`). Pages and the agent-facing files (`*.md`, `llms.txt`, `llms-full.txt`, `robots.txt`, sitemaps, the `release-notes.xml` feed) also pass through the Worker, which serves them from static assets, gives a page's Markdown twin to requests that ask for `text/markdown`, and records agent requests in Workers Logs and the `docs_agent_fetches` Analytics Engine dataset: browser analytics never see agents. Scripts, styles and images stay asset-first.
 
 Production follows releases, not `main`, so the docs never describe a package version that is not on npm. `.github/workflows/docs-deploy.yml` builds and deploys, then moves the `docs-live` tag to the deployed commit:
 

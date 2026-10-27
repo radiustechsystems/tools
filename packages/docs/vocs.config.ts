@@ -397,6 +397,15 @@ function headImpl(path: string, context: HeadContext, data: HeadData): HeadResul
 
   return {
     ...base,
+    // Feed autodiscovery on every page: readers and agents find release notes from any docs URL.
+    link: [
+      {
+        rel: 'alternate',
+        type: 'application/atom+xml',
+        title: 'Radius release notes',
+        href: `${data.siteUrl}/release-notes.xml`,
+      },
+    ],
     script: jsonLd.map((entry) => ({
       type: 'application/ld+json',
       innerHTML: JSON.stringify(entry).replace(/</g, '\\u003c'),
