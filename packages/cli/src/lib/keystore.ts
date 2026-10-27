@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Wallet } from 'ethers';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -14,9 +14,18 @@ export async function saveKeystore(path: string, privateKey: Hex, password: stri
 
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(path, json, { mode: 0o600 });
+  // Write then rename, so an interrupted write never leaves a half-written keystore in place.
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, json, { mode: 0o600 });
+  renameSync(tmp, path);
 
   return wallet.address as Address;
+}
+
+/** Re-encrypt the keystore under a new password. The key, and so the address, stay the same. */
+export async function changeKeystorePassword(path: string, currentPassword: string, newPassword: string): Promise<Address> {
+  const pk = await loadKeystorePrivateKey(path, currentPassword);
+  return await saveKeystore(path, pk, newPassword);
 }
 
 export async function loadKeystorePrivateKey(path: string, password: string): Promise<Hex> {

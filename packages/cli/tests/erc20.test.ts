@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createPublicClient, custom, decodeFunctionData, erc20Abi, encodeAbiParameters, numberToHex, type Address, type Hex } from 'viem';
 import { radiusTestnetChain, SBC } from 'radius-sdk';
-import { parseAmountArg, parseTokenArg, readBalances, sbcToken } from '../src/lib/erc20.js';
+import { formatBalanceLines, parseAmountArg, parseTokenArg, readBalances, sbcToken, type BalanceReport } from '../src/lib/erc20.js';
 import type { ResolvedConfig } from '../src/types.js';
 
 const OWNER: Address = '0x4f2d8a3b1c0e5d9b8e7a6c5d4e3f2a1b0c9d8e7f';
@@ -93,5 +93,32 @@ describe('readBalances', () => {
     expect(r.rusdWei).toBe('6000000000000000000');
     expect(r.sbc).toBe('0');
     expect(r.totalUsd).toBe(6);
+  });
+});
+
+describe('formatBalanceLines', () => {
+  const report: BalanceReport = {
+    address: OWNER,
+    totalUsd: 0.159963,
+    sbc: '0.030002',
+    rusd: '0.129961',
+    sbcWei: '30002',
+    rusdWei: '129961000000000000',
+    aggregateWei: '159963000000000000',
+    rusdSource: 'evm',
+    sbcError: null,
+  };
+
+  it('prints one greppable line per asset and the total', () => {
+    expect(formatBalanceLines(report)).toEqual([
+      `Address: ${OWNER}`,
+      'SBC:     0.030002',
+      'RUSD:    0.129961',
+      'Total:   0.159963 USD',
+    ]);
+  });
+
+  it('marks SBC unavailable when its read failed', () => {
+    expect(formatBalanceLines({ ...report, sbcError: 'boom' })[1]).toBe('SBC:     unavailable (boom)');
   });
 });

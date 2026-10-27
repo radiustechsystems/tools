@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { keystoreExists, loadKeystorePrivateKey, saveKeystore, readKeystoreAddress } from '../src/lib/keystore.js';
+import { changeKeystorePassword, keystoreExists, loadKeystorePrivateKey, saveKeystore, readKeystoreAddress } from '../src/lib/keystore.js';
 
 describe('keystore', () => {
   let dir: string;
@@ -38,4 +38,19 @@ describe('keystore', () => {
   it('throws on a bad password', async () => {
     await expect(loadKeystorePrivateKey(path, 'wrong')).rejects.toThrow();
   }, 20_000);
+
+  it('adds a password to a passwordless keystore without changing the key', async () => {
+    const p = join(dir, 'passwordless.json');
+    await saveKeystore(p, privateKey, '');
+    const addr = await changeKeystorePassword(p, '', password);
+    expect(addr.toLowerCase()).toBe(expectedAddress.toLowerCase());
+    expect(existsSync(`${p}.tmp`)).toBe(false);
+    await expect(loadKeystorePrivateKey(p, '')).rejects.toThrow();
+    expect((await loadKeystorePrivateKey(p, password)).toLowerCase()).toBe(privateKey.toLowerCase());
+  }, 60_000);
+
+  it('refuses to change the password without the current one', async () => {
+    await expect(changeKeystorePassword(path, 'wrong', 'new-password')).rejects.toThrow();
+    expect((await loadKeystorePrivateKey(path, password)).toLowerCase()).toBe(privateKey.toLowerCase());
+  }, 60_000);
 });

@@ -7,6 +7,7 @@ import { formatUnits, isAddress, type Address } from 'viem';
 import { SBC } from 'radius-sdk';
 import type { BalanceClient, BalanceToken, TokenAmount, TokenInput } from 'radius-sdk/client';
 import { getBalances, getAggregateBalance } from 'radius-sdk/client';
+import { formatUsd } from './format.js';
 import type { ResolvedConfig } from '../types.js';
 
 /** The configured SBC contract as a balance/ERC-20 token: `--sbc` / `RADIUS_SBC_ADDRESS`, else the canonical address. */
@@ -82,4 +83,15 @@ export async function readBalances(client: BalanceClient, cfg: ResolvedConfig, a
       sbcError: e instanceof Error ? e.message : String(e),
     };
   }
+}
+
+/** Human `wallet balance` output: one `label: value` line per asset and the total, so each is greppable. */
+export function formatBalanceLines(report: BalanceReport): string[] {
+  const sbc = report.sbcError ? `unavailable (${report.sbcError})` : formatUsd(report.sbc);
+  return [
+    `Address: ${report.address}`,
+    `SBC:     ${sbc}`,
+    `RUSD:    ${formatUsd(report.rusd)}`,
+    `Total:   ${formatUsd(report.totalUsd)} USD`,
+  ];
 }

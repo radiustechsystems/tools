@@ -3,11 +3,6 @@ export function formatUsd(value: string | number): string {
   return Number(value).toFixed(6);
 }
 
-/** Same, but at the typical 2-decimal "headline" precision. */
-export function formatUsdShort(value: string | number): string {
-  return Number(value).toFixed(2);
-}
-
 /** Stringify with bigints as decimal strings — viem returns lots of bigints. */
 export function jsonStringify(value: unknown, indent = 2): string {
   return JSON.stringify(

@@ -4,14 +4,14 @@ import { readFileSync } from 'node:fs';
 import { encodeFunctionData, isAddress, parseEther, verifyMessage, type Address, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { radiusNetwork, resolveConfig, readPasswordless, writeCachedAddress, writePasswordless } from '../lib/config.js';
-import { keystoreExists, loadKeystorePrivateKey, saveKeystore } from '../lib/keystore.js';
+import { changeKeystorePassword, keystoreExists, loadKeystorePrivateKey, saveKeystore } from '../lib/keystore.js';
 import { getOwnAddress, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
-import { parseAmountArg, parseTokenArg, readBalances } from '../lib/erc20.js';
+import { formatBalanceLines, parseAmountArg, parseTokenArg, readBalances } from '../lib/erc20.js';
 import { signJwt } from '../lib/jwt.js';
 import { parseTypedData } from '../lib/typedData.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
-import { formatUsd, formatUsdShort, jsonStringify } from '../lib/format.js';
+import { jsonStringify } from '../lib/format.js';
 import { registerWalletPay } from './walletPay.js';
 import type { GlobalOptions } from '../types.js';
 import { explorerTxUrl } from 'radius-sdk';
@@ -94,6 +94,29 @@ export function registerWallet(program: Command): void {
         return;
       }
       console.log(`Imported keystore at ${cfg.keystorePath}`);
+      console.log(`Address: ${address}`);
+    });
+
+  wallet
+    .command('password')
+    .description('Set or change the keystore password, keeping the same key and address')
+    .action(async (_subOpts, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      if (!keystoreExists(cfg.keystorePath)) {
+        throw new Error(`No keystore at ${cfg.keystorePath}. Run \`radius-cli wallet new\` or \`radius-cli wallet import\` first.`);
+      }
+      const current = cfg.password
+        ?? (readPasswordless() ? '' : await promptPassword({ message: 'Current keystore password:', mask: '*' }));
+      const next = await readNewPassword(process.env.RADIUS_NEW_PASSWORD);
+      const address = await changeKeystorePassword(cfg.keystorePath, current, next);
+      writeCachedAddress(address);
+      writePasswordless(next === '');
+      if (opts.json) {
+        console.log(jsonStringify({ path: cfg.keystorePath, address, passwordless: next === '' }));
+        return;
+      }
+      console.log(next === '' ? `Removed the password from ${cfg.keystorePath}` : `Updated the password of ${cfg.keystorePath}`);
       console.log(`Address: ${address}`);
     });
 
@@ -283,14 +306,7 @@ export function registerWallet(program: Command): void {
         console.log(jsonStringify(report));
         return;
       }
-      console.log(`Address: ${address}`);
-      if (report.sbcError) {
-        console.log(`Balance: $${formatUsdShort(report.totalUsd)} ($${formatUsd(report.rusd)} RUSD; SBC unavailable: ${report.sbcError})`);
-      } else {
-        console.log(
-          `Balance: $${formatUsdShort(report.totalUsd)} ($${formatUsd(report.sbc)} SBC + $${formatUsd(report.rusd)} RUSD)`,
-        );
-      }
+      for (const line of formatBalanceLines(report)) console.log(line);
     });
 
   wallet
