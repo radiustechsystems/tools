@@ -22,3 +22,4 @@ From the repository root, run whichever of these apply to what you changed. Ever
 - No eval case, test or example you run may spend from a funded wallet. The funded testnet proof (`pnpm eval:payments:live`) runs only when a person asks for it.
 - Never print, log or commit private keys, `RADIUS_*` secrets or API keys.
 - Write amounts as amount plus asset, no `$`: `0.001 SBC`. RUSD is the fee asset, SBC the x402 payment asset, USD a price unit.
+- Write PR descriptions from `.github/pull_request_template.md`. Pick the risk tier there, and run the review cycles that tier requires before asking a person to merge.
