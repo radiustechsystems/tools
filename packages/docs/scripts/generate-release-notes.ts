@@ -218,7 +218,9 @@ export function parseChangesetsVersion(body: string): { changes: Change[]; depen
       }
       // "<commit>: <text>"; continuation lines are indented two spaces under the item.
       const text = item.replace(/^[0-9a-f]{7,40}: /, '');
-      changes.push({ kind: kind === 'new' && /\*\*Breaking:?\*\*/.test(text) ? 'breaking' : kind, text });
+      // A minor change that says it breaks something (`**Breaking:**`, `**Breaking for installs:**`) is
+      // listed with the breaking changes.
+      changes.push({ kind: kind === 'new' && /\*\*Breaking\b[^*]*\*\*/.test(text) ? 'breaking' : kind, text });
     }
   }
   return { changes, dependencies };

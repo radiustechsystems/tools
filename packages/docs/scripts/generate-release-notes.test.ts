@@ -51,6 +51,9 @@ const changelog = `# radius-cli
 - def5678: Add \`thing\`. It does more.
   - **Breaking:** a sub-change.
 - 1234567: Add \`other\`.
+- 2345678: Move a dependency.
+
+  **Breaking for installs:** add it yourself.
 
 ### Patch Changes
 
@@ -71,7 +74,7 @@ test('Changesets sections map to breaking, new and fix; dependency bumps are pul
   const { changes, dependencies } = parseChangesetsVersion(body);
   assert.deepEqual(
     changes.map((change) => change.kind),
-    ['breaking', 'breaking', 'new', 'fix'],
+    ['breaking', 'breaking', 'new', 'breaking', 'fix'],
   );
   assert.equal(changes[1]!.text, 'Add `thing`. It does more.\n  - **Breaking:** a sub-change.');
   assert.deepEqual(dependencies, ['radius-sdk@0.6.0']);
