@@ -8,7 +8,7 @@ export interface ParsedSignature {
   isView: boolean;
 }
 
-function findMatchingClose(s: string, openIdx: number): number {
+export function findMatchingClose(s: string, openIdx: number): number {
   if (s[openIdx] !== '(') throw new Error('Expected opening paren');
   let depth = 0;
   for (let i = openIdx; i < s.length; i++) {

@@ -29,7 +29,7 @@ export function registerReceipt(program: Command): void {
     .argument('<hash>', 'transaction hash')
     .option(
       '--event <sig>',
-      'decode logs matching a cast-style event signature, e.g. "Transfer(address indexed from, address indexed to, uint256 value)" (repeatable)',
+      'decode logs matching a cast-style event signature, e.g. "Transfer(address indexed from, address indexed to, uint256 value)"; mark exactly the params the contract indexes (repeatable; exits 1 if the transaction reverted)',
       collect,
     )
     .action(async (hash: string, subOpts: { event?: string[] }, cmd) => {
@@ -44,10 +44,16 @@ export function registerReceipt(program: Command): void {
       if (events.length > 0) {
         const { logs, warnings } = decodeLogs(receipt.logs, events);
         for (const w of warnings) process.stderr.write(`warning: ${w}\n`);
+        // A reverted transaction emits no logs; exit 1 so "reverted" never reads as "no matching events".
+        if (receipt.status !== 'success') {
+          process.stderr.write(`error: transaction ${receipt.transactionHash} reverted (status: ${receipt.status})\n`);
+          process.exitCode = 1;
+        }
         if (opts.json) {
           console.log(jsonStringify(logs));
           return;
         }
+        console.log(`Status: ${receipt.status}`);
         for (const entry of logs) {
           if (isDecoded(entry)) {
             console.log(`Log ${entry.logIndex ?? '?'}  ${entry.address}  ${entry.eventName}`);

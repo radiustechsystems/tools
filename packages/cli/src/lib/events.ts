@@ -1,4 +1,6 @@
 import { decodeEventLog, parseAbiItem, toEventSelector, type AbiEvent, type Address, type Hex } from 'viem';
+import { errDetail } from './format.js';
+import { findMatchingClose } from './signature.js';
 
 export interface ParsedEvent {
   abiItem: AbiEvent;
@@ -23,12 +25,8 @@ export interface DecodedLogEntry {
   args: Record<string, unknown>;
 }
 
-export interface RawLogEntry {
-  address: Address;
-  logIndex: number | null;
-  topics: readonly Hex[];
-  data: Hex;
-}
+/** An undecoded log, trimmed to the fields of `RawLog` (the receipt's log carries more). */
+export type RawLogEntry = RawLog;
 
 export type LogEntry = DecodedLogEntry | RawLogEntry;
 
@@ -44,16 +42,24 @@ export interface DecodeResult {
  */
 export function parseEventSignature(sig: string): ParsedEvent {
   const trimmed = sig.trim().replace(/^event\s+/, '');
-  const name = trimmed.slice(0, trimmed.indexOf('(')).trim();
-  if (!trimmed.includes('(') || !trimmed.endsWith(')') || !/^[a-zA-Z_$][\w$]*$/.test(name)) {
-    throw new Error(`Invalid event signature: '${sig}' (expected e.g. "Transfer(address indexed from, address indexed to, uint256 value)")`);
+  const invalid = (detail: string) =>
+    new Error(`Invalid event signature: '${sig}': ${detail} (expected e.g. "Transfer(address indexed from, address indexed to, uint256 value)")`);
+  const firstParen = trimmed.indexOf('(');
+  if (firstParen === -1) throw invalid("no '(' found");
+  if (!/^[a-zA-Z_$][\w$]*$/.test(trimmed.slice(0, firstParen).trim())) throw invalid('invalid event name');
+  let argsClose: number;
+  try {
+    argsClose = findMatchingClose(trimmed, firstParen);
+  } catch (err) {
+    throw invalid(errDetail(err));
   }
+  const tail = trimmed.slice(argsClose + 1).trim();
+  if (tail) throw invalid(`unexpected trailing content '${tail}'`);
   let abiItem: AbiEvent;
   try {
     abiItem = parseAbiItem(`event ${trimmed}`) as AbiEvent;
   } catch (err) {
-    const detail = err instanceof Error ? (err as { shortMessage?: string }).shortMessage ?? err.message : String(err);
-    throw new Error(`Invalid event signature: '${sig}': ${detail}`);
+    throw invalid(errDetail(err));
   }
   return {
     abiItem,
@@ -65,6 +71,8 @@ export function parseEventSignature(sig: string): ParsedEvent {
 /**
  * Decode each log against the first event whose selector equals topics[0] and whose indexed-param
  * count matches the log's topics. Logs that match no event are returned raw, never dropped.
+ * Which params are indexed is taken from the signature: a log does not record it, so a signature that
+ * marks the same number of params `indexed` but different ones decodes without error, to wrong values.
  */
 export function decodeLogs(logs: readonly RawLog[], events: readonly ParsedEvent[]): DecodeResult {
   const warnings: string[] = [];
@@ -85,8 +93,7 @@ export function decodeLogs(logs: readonly RawLog[], events: readonly ParsedEvent
     try {
       decoded = decodeEventLog({ abi: [event.abiItem], topics: log.topics as [Hex, ...Hex[]], data: log.data, strict: true });
     } catch (err) {
-      const detail = err instanceof Error ? (err as { shortMessage?: string }).shortMessage ?? err.message : String(err);
-      warnings.push(`log ${log.logIndex ?? '?'} matches the ${event.abiItem.name} selector but its data does not decode: ${detail}. Left undecoded.`);
+      warnings.push(`log ${log.logIndex ?? '?'} matches the ${event.abiItem.name} selector but its data does not decode: ${errDetail(err)}. Left undecoded.`);
       return raw;
     }
     return { address: log.address, logIndex: log.logIndex, eventName: event.abiItem.name, args: namedArgs(event.abiItem, decoded.args) };

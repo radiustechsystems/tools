@@ -85,7 +85,7 @@ Creating the keystore never prompts, so agents and scripts do not block on it. A
 RADIUS_HOME=.radius RADIUS_NEW_PASSWORD='use-a-secret-manager' radius-cli wallet password
 ```
 
-Without `RADIUS_NEW_PASSWORD`, `wallet password` prompts for the new password. If the keystore already has a password, pass the current one in `RADIUS_PASSWORD` or at the prompt. `wallet new --force` replaces the key with a new one, so do not use it to add a password to a wallet that holds funds.
+Without `RADIUS_NEW_PASSWORD`, `wallet password` prompts for the new password. Either way it needs at least 8 characters; to remove the password, pass `--remove`. If the keystore already has a password, pass the current one in `RADIUS_PASSWORD` or at the prompt. `wallet new --force` replaces the key with a new one, so do not use it to add a password to a wallet that holds funds.
 
 ## Configuration precedence
 
@@ -184,7 +184,7 @@ radius-cli receipt 0xTransactionHash --json \
   --event "Approval(address indexed owner, address indexed spender, uint256 value)"
 ```
 
-With `--json`, the output is an array with one entry per log: `{address, logIndex, eventName, args}` for a decoded log, `{address, logIndex, topics, data}` for a log that matches no signature. Unnamed params are keyed by position. A log whose selector matches but whose topic count does not is left raw, with a warning on stderr.
+With `--json`, the output is an array with one entry per log: `{address, logIndex, eventName, args}` for a decoded log, `{address, logIndex, topics, data}` for a log that matches no signature. Unnamed params are keyed by position. A log whose selector matches but whose topic count does not is left raw, with a warning on stderr. A log does not record which params are indexed, so a signature that marks the same number of params but different ones decodes to wrong values without a warning. If the transaction reverted, `receipt --event` prints an error on stderr and exits `1`.
 
 ## Paid endpoints
 

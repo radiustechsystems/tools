@@ -32,6 +32,7 @@ describe('parseEventSignature', () => {
     expect(() => parseEventSignature('Transfer(address indexed from')).toThrow(/Invalid event signature/);
     expect(() => parseEventSignature('Transfer(adress from)')).toThrow(/Invalid event signature/);
     expect(() => parseEventSignature('1bad(uint256)')).toThrow(/Invalid event signature/);
+    expect(() => parseEventSignature('Foo(uint256)garbage)')).toThrow(/trailing content 'garbage\)'/);
   });
 });
 

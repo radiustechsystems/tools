@@ -112,13 +112,16 @@ describe('formatBalanceLines', () => {
   it('prints one greppable line per asset and the total', () => {
     expect(formatBalanceLines(report)).toEqual([
       `Address: ${OWNER}`,
-      'SBC:     0.030002',
-      'RUSD:    0.129961',
+      'SBC:     0.030002 SBC',
+      'RUSD:    0.129961 RUSD',
       'Total:   0.159963 USD',
     ]);
   });
 
-  it('marks SBC unavailable when its read failed', () => {
-    expect(formatBalanceLines({ ...report, sbcError: 'boom' })[1]).toBe('SBC:     unavailable (boom)');
+  it('marks SBC unavailable when its read failed, keeping a multi-line error to its first line', () => {
+    const sbcError = 'HTTP request failed.\n\nURL: https://rpc.example\nRequest body: {}';
+    const lines = formatBalanceLines({ ...report, sbcError });
+    expect(lines).toHaveLength(4);
+    expect(lines[1]).toBe('SBC:     unavailable (HTTP request failed.)');
   });
 });

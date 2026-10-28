@@ -34,7 +34,7 @@ Override the URL with `--rpc-url` or `RADIUS_RPC_URL` if you want to point at a 
 
 ## Wallet
 
-On first use, any account-needing command (`wallet address`, `balance`, `sign`, `send`, …) auto-creates a keystore at `~/.radius/keystore.json` with no password set (file mode `0o600`). No command prompts while creating it, so agents and scripts never block. To add a password later and keep the same key and address, run `radius-cli wallet password` (set `RADIUS_NEW_PASSWORD` to skip the prompt); to set one at creation, set `RADIUS_PASSWORD` before the first command. (`wallet new --force` replaces the key with a new one.) The keystore is Web3 Secret Storage v3 — compatible with geth/foundry. The address is cached in `~/.radius/config.json` so `radius-cli wallet address` is a cheap read.
+On first use, any account-needing command (`wallet address`, `balance`, `sign`, `send`, …) auto-creates a keystore at `~/.radius/keystore.json` with no password set (file mode `0o600`). No command prompts while creating it, so agents and scripts never block. To add a password later and keep the same key and address, run `radius-cli wallet password` (set `RADIUS_NEW_PASSWORD`, at least 8 characters, to skip the prompt; `--remove` removes the password); to set one at creation, set `RADIUS_PASSWORD` before the first command. (`wallet new --force` replaces the key with a new one.) The keystore is Web3 Secret Storage v3 — compatible with geth/foundry. The address is cached in `~/.radius/config.json` so `radius-cli wallet address` is a cheap read.
 
 ```bash
 radius-cli wallet new
@@ -63,8 +63,8 @@ radius-cli wallet send 0xToken "transfer(address,uint256)" 0xTo 100   # arbitrar
 
 ```text
 Address: 0x4F2D8a3b1c0E5d9b8e7a6c5d4e3f2a1b0c9d8e7f
-SBC:     10.000000
-RUSD:    2.345678
+SBC:     10.000000 SBC
+RUSD:    2.345678 RUSD
 Total:   12.345678 USD
 ```
 
@@ -137,7 +137,7 @@ radius-cli --network testnet network              # chain id, RPC, explorer, fau
 
 Function signatures use `cast` syntax: `name(args)` for state-changing calls, `name(args)(returns)` for read calls (the result is decoded against the return types).
 
-`receipt --event <sig>` decodes the receipt's logs against a `cast`-style event signature. Repeat `--event` to try several signatures against every log. A log is decoded when its `topics[0]` is the event's selector and its topic count matches the number of `indexed` params, so mark them with `indexed`: that is how the decoder tells topics from data, and how it tells an ERC-20 `Transfer` (two indexed params) from an ERC-721 `Transfer` (three). A log whose selector matches but whose topic count does not is left undecoded, with a warning on stderr. Logs that match no signature are printed raw, never dropped. Unnamed params are keyed by position (`"0"`, `"1"`, …).
+`receipt --event <sig>` decodes the receipt's logs against a `cast`-style event signature. Repeat `--event` to try several signatures against every log. A log is decoded when its `topics[0]` is the event's selector and its topic count matches the number of `indexed` params, so mark them with `indexed`: that is how the decoder tells topics from data, and how it tells an ERC-20 `Transfer` (two indexed params) from an ERC-721 `Transfer` (three). A log whose selector matches but whose topic count does not is left undecoded, with a warning on stderr. Logs that match no signature are printed raw, never dropped. Unnamed params are keyed by position (`"0"`, `"1"`, …). A log does not record which params are indexed, so mark exactly the ones the contract indexes: a signature that marks the same number of params but different ones decodes without a warning, to wrong values. With `--event`, the human output starts with `Status:`, and a reverted transaction prints an error on stderr and exits 1, so a revert never reads as "no matching events".
 
 ```bash
 radius-cli --json receipt 0xTx --event "Transfer(address indexed,address indexed,uint256 indexed tokenId)" \

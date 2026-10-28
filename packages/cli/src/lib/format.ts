@@ -3,6 +3,12 @@ export function formatUsd(value: string | number): string {
   return Number(value).toFixed(6);
 }
 
+/** A one-line message for an error: viem's `shortMessage` when present, else the first line of `message`. */
+export function errDetail(err: unknown): string {
+  if (!(err instanceof Error)) return String(err).split('\n')[0];
+  return ((err as { shortMessage?: string }).shortMessage ?? err.message).split('\n')[0];
+}
+
 /** Stringify with bigints as decimal strings — viem returns lots of bigints. */
 export function jsonStringify(value: unknown, indent = 2): string {
   return JSON.stringify(

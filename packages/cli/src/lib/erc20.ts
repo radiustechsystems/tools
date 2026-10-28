@@ -87,11 +87,12 @@ export async function readBalances(client: BalanceClient, cfg: ResolvedConfig, a
 
 /** Human `wallet balance` output: one `label: value` line per asset and the total, so each is greppable. */
 export function formatBalanceLines(report: BalanceReport): string[] {
-  const sbc = report.sbcError ? `unavailable (${report.sbcError})` : formatUsd(report.sbc);
+  // Only the first line of the error: viem's are multi-line (URL, request body) and would break the one-line-per-asset layout.
+  const sbc = report.sbcError ? `unavailable (${report.sbcError.split('\n')[0]})` : `${formatUsd(report.sbc)} SBC`;
   return [
     `Address: ${report.address}`,
     `SBC:     ${sbc}`,
-    `RUSD:    ${formatUsd(report.rusd)}`,
+    `RUSD:    ${formatUsd(report.rusd)} RUSD`,
     `Total:   ${formatUsd(report.totalUsd)} USD`,
   ];
 }
