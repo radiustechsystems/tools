@@ -31,6 +31,7 @@
     "@x402/evm": "2.27.0",
     "hono": "^4.13.7",
     "lucide-react": "^0.576.0",
+    "mermaid": "^11.17.2",
     "radius-sdk": "workspace:*",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
