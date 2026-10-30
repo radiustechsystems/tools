@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { basename, dirname, join } from 'node:path';
 import { Wallet } from 'ethers';
 import { privateKeyToAccount } from 'viem/accounts';
 import { getAddress, type Address, type Hex } from 'viem';
@@ -12,11 +13,35 @@ export async function saveKeystore(path: string, privateKey: Hex, password: stri
   const wallet = new Wallet(privateKey);
   const json = await wallet.encrypt(password);
 
-  const dir = dirname(path);
+  // Write through a symlink to its target, as a plain write would, rather than replacing the link.
+  const target = existsSync(path) ? realpathSync(path) : path;
+  const dir = dirname(target);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(path, json, { mode: 0o600 });
+
+  // Write a fresh, uniquely named temp file (0o600 from creation, fsynced), then rename it into place,
+  // so an interrupted write or a concurrent CLI process never leaves a partial or foreign keystore.
+  const tmp = join(dir, `.${basename(target)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+  try {
+    const fd = openSync(tmp, 'wx', 0o600);
+    try {
+      writeSync(fd, json);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, target);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
 
   return wallet.address as Address;
+}
+
+/** Re-encrypt the keystore under a new password. The key, and so the address, stay the same. */
+export async function changeKeystorePassword(path: string, currentPassword: string, newPassword: string): Promise<Address> {
+  const pk = await loadKeystorePrivateKey(path, currentPassword);
+  return await saveKeystore(path, pk, newPassword);
 }
 
 export async function loadKeystorePrivateKey(path: string, password: string): Promise<Hex> {

@@ -39,7 +39,8 @@ async function autoCreateKeystore(cfg: ResolvedConfig): Promise<PrivateKeyAccoun
   if (password === '') {
     lines.push(
       'No password set — keystore is effectively unencrypted (file mode 0o600).',
-      'To rotate to a password-protected keystore: `radius-cli wallet new --force`',
+      'To add one and keep this address: `radius-cli wallet password` (set RADIUS_NEW_PASSWORD to skip the prompt).',
+      'To set one at creation instead, set RADIUS_PASSWORD before the first command.',
     );
   }
   process.stderr.write(lines.join('\n') + '\n');

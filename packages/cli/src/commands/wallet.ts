@@ -4,14 +4,14 @@ import { readFileSync } from 'node:fs';
 import { encodeFunctionData, isAddress, parseEther, verifyMessage, type Address, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { radiusNetwork, resolveConfig, readPasswordless, writeCachedAddress, writePasswordless } from '../lib/config.js';
-import { keystoreExists, loadKeystorePrivateKey, saveKeystore } from '../lib/keystore.js';
+import { changeKeystorePassword, keystoreExists, loadKeystorePrivateKey, saveKeystore } from '../lib/keystore.js';
 import { getOwnAddress, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
-import { parseAmountArg, parseTokenArg, readBalances } from '../lib/erc20.js';
+import { formatBalanceLines, parseAmountArg, parseTokenArg, readBalances } from '../lib/erc20.js';
 import { signJwt } from '../lib/jwt.js';
 import { parseTypedData } from '../lib/typedData.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
-import { formatUsd, formatUsdShort, jsonStringify } from '../lib/format.js';
+import { errDetail, jsonStringify } from '../lib/format.js';
 import { registerWalletPay } from './walletPay.js';
 import type { GlobalOptions } from '../types.js';
 import { explorerTxUrl } from 'radius-sdk';
@@ -94,6 +94,46 @@ export function registerWallet(program: Command): void {
         return;
       }
       console.log(`Imported keystore at ${cfg.keystorePath}`);
+      console.log(`Address: ${address}`);
+    });
+
+  wallet
+    .command('password')
+    .description('Set or change the keystore password, keeping the same key and address')
+    .option('--remove', 'remove the password instead (the keystore becomes effectively unencrypted)')
+    .action(async (subOpts: { remove?: boolean }, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      if (!keystoreExists(cfg.keystorePath)) {
+        throw new Error(`No keystore at ${cfg.keystorePath}. Run \`radius-cli wallet new\` or \`radius-cli wallet import\` first.`);
+      }
+      // A passwordless keystore decrypts with '', even when RADIUS_PASSWORD is already exported for later commands.
+      const current = readPasswordless()
+        ? ''
+        : cfg.password ?? await promptPassword({ message: 'Current keystore password:', mask: '*' });
+      // The env value gets the same rule as the prompt, so an empty or unset CI secret never strips the password.
+      const envNext = process.env.RADIUS_NEW_PASSWORD;
+      if (subOpts.remove && envNext !== undefined) throw new Error('Pass either --remove or RADIUS_NEW_PASSWORD, not both.');
+      if (envNext !== undefined && envNext.length < 8) {
+        throw new Error('RADIUS_NEW_PASSWORD must be at least 8 characters. To remove the password, pass --remove.');
+      }
+      const next = subOpts.remove ? '' : await readNewPassword(envNext);
+      let address: Address;
+      try {
+        address = await changeKeystorePassword(cfg.keystorePath, current, next);
+      } catch (err) {
+        if (current !== '' && cfg.password !== undefined) {
+          throw new Error(`Could not decrypt ${cfg.keystorePath} with RADIUS_PASSWORD: ${errDetail(err)}`);
+        }
+        throw new Error(`Could not decrypt ${cfg.keystorePath}: ${errDetail(err)}`);
+      }
+      writeCachedAddress(address);
+      writePasswordless(next === '');
+      if (opts.json) {
+        console.log(jsonStringify({ path: cfg.keystorePath, address, passwordless: next === '' }));
+        return;
+      }
+      console.log(next === '' ? `Removed the password from ${cfg.keystorePath}` : `Updated the password of ${cfg.keystorePath}`);
       console.log(`Address: ${address}`);
     });
 
@@ -283,14 +323,7 @@ export function registerWallet(program: Command): void {
         console.log(jsonStringify(report));
         return;
       }
-      console.log(`Address: ${address}`);
-      if (report.sbcError) {
-        console.log(`Balance: $${formatUsdShort(report.totalUsd)} ($${formatUsd(report.rusd)} RUSD; SBC unavailable: ${report.sbcError})`);
-      } else {
-        console.log(
-          `Balance: $${formatUsdShort(report.totalUsd)} ($${formatUsd(report.sbc)} SBC + $${formatUsd(report.rusd)} RUSD)`,
-        );
-      }
+      for (const line of formatBalanceLines(report)) console.log(line);
     });
 
   wallet

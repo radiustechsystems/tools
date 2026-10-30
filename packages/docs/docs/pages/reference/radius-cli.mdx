@@ -29,7 +29,7 @@ command -v radius-cli
 radius-cli --help
 ```
 
-Use `radius-cli` version `0.4.0` or later. From `0.3.0`, `wallet balance` reports {NATIVE_TOKEN} and {STABLECOIN} separately, and `wallet send` transfers any ERC-20. From `0.4.0`, `wallet pay` (formerly `wallet x402`, with `--threshold` and `--approve-permit2` formerly `--x402-threshold` and `--x402-approve-permit2`) also pays MPP challenges and USDC on Base. From `0.5.0`, `sell check` checks a seller's `402` before you deploy it. Verify that your installed binary exposes the payment command:
+Use `radius-cli` version `0.4.0` or later. From `0.3.0`, `wallet balance` reports {NATIVE_TOKEN} and {STABLECOIN} separately, and `wallet send` transfers any ERC-20. From `0.4.0`, `wallet pay` (formerly `wallet x402`, with `--threshold` and `--approve-permit2` formerly `--x402-threshold` and `--x402-approve-permit2`) also pays MPP challenges and USDC on Base. From `0.5.0`, `sell check` checks a seller's `402` before you deploy it. From `0.7.0`, `receipt --event` decodes logs, `wallet password` adds or changes the keystore password, and `wallet balance` prints one line per asset. Verify that your installed binary exposes the payment command:
 
 ```bash
 radius-cli --version
@@ -79,12 +79,20 @@ To opt into a password before creating a wallet, set `RADIUS_PASSWORD`:
 RADIUS_HOME=.radius RADIUS_NETWORK=testnet RADIUS_PASSWORD='use-a-secret-manager' radius-cli wallet new
 ```
 
+Creating the keystore never prompts, so agents and scripts do not block on it. A keystore created without a password can get one later, keeping the same key and address:
+
+```bash
+RADIUS_HOME=.radius RADIUS_NEW_PASSWORD='use-a-secret-manager' radius-cli wallet password
+```
+
+Without `RADIUS_NEW_PASSWORD`, `wallet password` prompts for the new password. Either way it needs at least 8 characters; to remove the password, pass `--remove`. If the keystore already has a password, pass the current one in `RADIUS_PASSWORD` or at the prompt. `wallet new --force` replaces the key with a new one, so do not use it to add a password to a wallet that holds funds.
+
 ## Configuration precedence
 
 `radius-cli` resolves configuration in this order:
 
 1. CLI flags: `--network`, `--rpc-url`, `--sbc`, `--rusd`, `--json`, `--private-key`
-2. Environment: `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_PASSWORD`, `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`
+2. Environment: `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_PASSWORD`, `RADIUS_NEW_PASSWORD`, `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`
 3. Radius config file in the active Radius home
 4. Built-in defaults
 
@@ -109,7 +117,7 @@ RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
 radius-cli wallet balance 0x0000000000000000000000000000000000000000 --json
 ```
 
-The JSON reports `sbc` and `rusd` separately (with `sbcWei` and `rusdWei`), their sum as `totalUsd`, and `aggregateWei`, the value `eth_getBalance` returns. On Radius `eth_getBalance` already includes {STABLECOIN}; see [The Turnstile and balances](/reference/ethereum-compatibility#the-turnstile-and-balances).
+Without `--json`, each asset and the total print on their own line (`SBC:`, `RUSD:`, `Total:`), so you can `grep` one of them. The JSON reports `sbc` and `rusd` separately (with `sbcWei` and `rusdWei`), their sum as `totalUsd`, and `aggregateWei`, the value `eth_getBalance` returns. On Radius `eth_getBalance` already includes {STABLECOIN}; see [The Turnstile and balances](/reference/ethereum-compatibility#the-turnstile-and-balances).
 
 Sign and verify messages:
 
@@ -167,6 +175,16 @@ radius-cli nonce 0xWalletAddress
 ```
 
 Function signatures use cast-style syntax: `name(args)` for writes and `name(args)(returns)` for decoded reads.
+
+Decode the events in a receipt with `--event` and a cast-style event signature. Mark the `indexed` params: the decoder reads them from the topics and uses their count to tell events with the same selector apart, such as ERC-20 and ERC-721 `Transfer`. Repeat `--event` for more signatures:
+
+```bash
+radius-cli receipt 0xTransactionHash --json \
+  --event "Transfer(address indexed from, address indexed to, uint256 value)" \
+  --event "Approval(address indexed owner, address indexed spender, uint256 value)"
+```
+
+With `--json`, the output is an array with one entry per log: `{address, logIndex, eventName, args}` for a decoded log, `{address, logIndex, topics, data}` for a log that matches no signature. Unnamed params are keyed by position. A log whose selector matches but whose topic count does not is left raw, with a warning on stderr. A log does not record which params are indexed, so a signature that marks the same number of params but different ones decodes to wrong values without a warning. If the transaction reverted, `receipt --event` prints an error on stderr and exits `1`.
 
 ## Paid endpoints
 
