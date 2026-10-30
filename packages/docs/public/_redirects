@@ -97,3 +97,17 @@
 /developer-resources/radius-sdk                         /reference/radius-sdk                         301
 /developer-resources/radius-sdk/                        /reference/radius-sdk/                        301
 /developer-resources/radius-sdk.md                      /reference/radius-sdk.md                      301
+
+# --- 404s seen in traffic (2026-10) ------------------------------------------
+
+/llms/why-radius                                        /why-radius                                   301
+/llms/why-radius/                                       /why-radius/                                  301
+/llms/why-radius.md                                     /why-radius.md                                301
+/getting-started/claim-and-transact                     /build/claim-and-transact                     301
+/getting-started/claim-and-transact/                    /build/claim-and-transact/                    301
+/getting-started/claim-and-transact.md                  /build/claim-and-transact.md                  301
+/quickstart/javascript                                  /build                                        301
+/quickstart/javascript/                                 /build/                                       301
+/quickstart/javascript.md                               /build.md                                     301
+/contact                                                https://www.radiustech.xyz/contact            301
+/contact/                                               https://www.radiustech.xyz/contact            301
