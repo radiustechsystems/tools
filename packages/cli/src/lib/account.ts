@@ -14,10 +14,37 @@ function normalizePrivateKey(input: string): Hex {
   return withPrefix as Hex;
 }
 
+/** Where a non-interactive run gets the keystore password from, for error messages. */
+export const PASSWORD_SOURCES = 'set RADIUS_PASSWORD or pass --password-file <path>';
+
+/**
+ * Ask for a password on the terminal. Without one (an agent, CI, a pipe) there is nobody to ask:
+ * fail with the options that work instead of the prompt library's "force closed" error.
+ */
+export async function promptSecret(message: string, isTTY = !!process.stdin.isTTY): Promise<string> {
+  if (!isTTY) throw new Error(`${message.replace(/:$/, '')} needed but stdin is not a terminal: ${PASSWORD_SOURCES}`);
+  return await promptPassword({ message, mask: '*' });
+}
+
+/** True when unlocking the keystore would prompt: it exists, is password-protected, and no password was given. */
+export function needsPasswordPrompt(cfg: ResolvedConfig, privateKeyOpt: string | undefined): boolean {
+  return !privateKeyOpt && cfg.password === undefined && keystoreExists(cfg.keystorePath) && !readPasswordless();
+}
+
+/**
+ * Throw now, before any request is made, when signing later would need a prompt that cannot be
+ * shown (stdin is not a terminal). For commands that unlock the keystore only once they pay.
+ */
+export function assertCanUnlock(cfg: ResolvedConfig, privateKeyOpt: string | undefined, isTTY = !!process.stdin.isTTY): void {
+  if (!isTTY && needsPasswordPrompt(cfg, privateKeyOpt)) {
+    throw new Error(`the keystore at ${cfg.keystorePath} is password-protected and stdin is not a terminal: ${PASSWORD_SOURCES}`);
+  }
+}
+
 async function resolvePassword(cfg: ResolvedConfig): Promise<string> {
   if (cfg.password !== undefined) return cfg.password;
   if (readPasswordless()) return '';
-  return await promptPassword({ message: 'Keystore password:', mask: '*' });
+  return await promptSecret('Keystore password:');
 }
 
 /**
@@ -47,7 +74,10 @@ async function autoCreateKeystore(cfg: ResolvedConfig): Promise<PrivateKeyAccoun
   return privateKeyToAccount(pk);
 }
 
-/** Returns a viem account. Auto-creates a keystore on first use; prompts for password if one exists. */
+/**
+ * Returns a viem account. Auto-creates a keystore on first use. The password comes from
+ * `--password-file`, else RADIUS_PASSWORD, else a terminal prompt (an error without a terminal).
+ */
 export async function requireAccount(
   cfg: ResolvedConfig,
   privateKeyOpt: string | undefined,

@@ -79,11 +79,13 @@ To opt into a password before creating a wallet, set `RADIUS_PASSWORD`:
 RADIUS_HOME=.radius RADIUS_NETWORK=testnet RADIUS_PASSWORD='use-a-secret-manager' radius-cli wallet new
 ```
 
+Commands that unlock a password-protected keystore read the password from `--password-file <path>` (one trailing newline is ignored), else `RADIUS_PASSWORD`, else a prompt. Without a terminal, as under an agent or in CI, they fail with a message naming those two options instead of prompting (`radius-cli` 0.7.0 or later).
+
 ## Configuration precedence
 
 `radius-cli` resolves configuration in this order:
 
-1. CLI flags: `--network`, `--rpc-url`, `--sbc`, `--rusd`, `--json`, `--private-key`
+1. CLI flags: `--network`, `--rpc-url`, `--sbc`, `--rusd`, `--json`, `--private-key`, `--password-file`
 2. Environment: `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_PASSWORD`, `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`
 3. Radius config file in the active Radius home
 4. Built-in defaults
@@ -262,9 +264,24 @@ radius-cli sell check https://api.example.com/query -X post -d '{"q":1}' --facil
 radius-cli --json sell check http://localhost:8787/api/lookup --probe-head
 ```
 
-`--probe-head` also sends an unpaid `HEAD` and warns when it is served, because routers answer `HEAD` with the `GET` handler. `--pay --threshold <amount>` then makes one paid request from the local wallet and checks that a receipt comes back. It pays on testnet unless `--network mainnet` is given, whatever `RADIUS_NETWORK` says. The paid request gets a longer timeout than `--timeout`, and if it still fails after the payment was sent, the report says the payment may have settled.
+### Free quotas
 
-The command prints one line per check (`ok`, `warn`, `FAIL`, `skip`, `info`); with `--json`, stdout is one object with `ok`, `offers`, `mpp`, `facilitators`, `checks` and `summary`. It exits `0` when no check failed, `1` when one did, and `2` on invalid flags (a malformed `-H`, an unreadable `-d @file`, an unknown `--network`, a bad `--price` or `--threshold`).
+A route can be paid but serve the first requests in each window free. When the unpaid request is served (`2xx`) with a `RateLimit-Remaining` header (or `X-RateLimit-Remaining`), `sell check` reports the free quota (limit, remaining, reset) and, if `RateLimit-Remaining + 1` requests fit within `--free-requests` (default 25), sends that many more unpaid requests to use it up, then checks the `402`. If they do not fit, or with `--free-requests 0`, it reports the quota without checking the `402` and does not fail. Those requests count against your own quota. A `2xx` without RateLimit headers fails: the route is served without payment. Free quota handling needs `radius-cli` 0.7.0 or later.
+
+### Every route of a project
+
+`--pricing <file|url>` checks every route listed in a Radius Platform `pricing.md`, a local file or its published URL, each against its own price:
+
+```bash
+radius-cli sell check --pricing pricing.md --base-url http://localhost:8788 \
+  --param address=0x0000000000000000000000000000000000000001 --param hash=0xabc
+```
+
+Each listed method of each route is checked (`ANY` with `GET`), in file order. The base URL is the catalog's `Base URL`, or `--base-url`, which is required while the file shows the `[Base URL]` placeholder. `--param name=value` fills path parameters such as `:address`; a route with an unfilled parameter is skipped and listed with the `--param` it needs. The command prints a report per route and totals, and exits `1` when a route fails or none could be checked. `--price`, `-X` and `--pay` do not apply with `--pricing`. This needs `radius-cli` 0.7.0 or later.
+
+`--probe-head` also sends an unpaid `HEAD` and warns when it is served, because routers answer `HEAD` with the `GET` handler. `--pay --threshold <amount>` then makes one paid request from the local wallet and checks that a receipt comes back. It pays on testnet unless `--network mainnet` is given, whatever `RADIUS_NETWORK` says. Under an agent, pass the keystore password with `--password-file` or `RADIUS_PASSWORD`; without one and without a terminal, `--pay` exits `2` before any request. The paid request gets a longer timeout than `--timeout`, and if it still fails after the payment was sent, the report says the payment may have settled.
+
+The command prints one line per check (`ok`, `warn`, `FAIL`, `skip`, `info`); with `--json`, stdout is one object with `ok`, `offers`, `mpp`, `facilitators`, `freeQuota` (when there is one), `checks` and `summary`, or, with `--pricing`, `source`, `ok`, `routes` and `summary`. It exits `0` when no check failed, `1` when one did, and `2` on invalid flags (a malformed `-H`, an unreadable `-d @file`, an unknown `--network`, a bad `--price` or `--threshold`).
 
 ## When to use other tools
 

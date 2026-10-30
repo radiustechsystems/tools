@@ -1,11 +1,11 @@
 import { Command } from 'commander';
-import { confirm, password as promptPassword } from '@inquirer/prompts';
+import { confirm } from '@inquirer/prompts';
 import { readFileSync } from 'node:fs';
 import { encodeFunctionData, isAddress, parseEther, verifyMessage, type Address, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { radiusNetwork, resolveConfig, readPasswordless, writeCachedAddress, writePasswordless } from '../lib/config.js';
 import { keystoreExists, loadKeystorePrivateKey, saveKeystore } from '../lib/keystore.js';
-import { getOwnAddress, requireAccount } from '../lib/account.js';
+import { getOwnAddress, promptSecret, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
 import { parseAmountArg, parseTokenArg, readBalances } from '../lib/erc20.js';
 import { signJwt } from '../lib/jwt.js';
@@ -40,9 +40,9 @@ function normalizePrivateKey(input: string): Hex {
 
 async function readNewPassword(envPassword?: string): Promise<string> {
   if (envPassword !== undefined) return envPassword;
-  const first = await promptPassword({ message: 'New keystore password:', mask: '*' });
+  const first = await promptSecret('New keystore password:');
   if (first.length < 8) throw new Error('Password must be at least 8 characters.');
-  const second = await promptPassword({ message: 'Confirm password:', mask: '*' });
+  const second = await promptSecret('Confirm password:');
   if (first !== second) throw new Error('Passwords do not match.');
   return first;
 }
@@ -133,7 +133,7 @@ export function registerWallet(program: Command): void {
         pk = normalizePrivateKey(opts.privateKey);
       } else {
         const password = cfg.password
-          ?? (readPasswordless() ? '' : await promptPassword({ message: 'Keystore password:', mask: '*' }));
+          ?? (readPasswordless() ? '' : await promptSecret('Keystore password:'));
         pk = await loadKeystorePrivateKey(cfg.keystorePath, password);
       }
       const address = privateKeyToAccount(pk).address;

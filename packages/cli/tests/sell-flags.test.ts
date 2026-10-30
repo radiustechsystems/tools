@@ -10,7 +10,7 @@ class Exit extends Error {
 }
 
 async function run(...args: string[]): Promise<{ code: number; stderr: string }> {
-  const program = new Command().option('--network <name>').option('--rpc-url <url>').option('--private-key <hex>').option('--sbc <address>').option('--rusd <address>').option('--json');
+  const program = new Command().option('--network <name>').option('--rpc-url <url>').option('--private-key <hex>').option('--password-file <path>').option('--sbc <address>').option('--rusd <address>').option('--json');
   registerSell(program);
   let stderr = '';
   const write = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { stderr += String(chunk); return true; });
@@ -44,6 +44,19 @@ describe('sell check flag validation', () => {
     ['a bad --price', ['sell', 'check', url, '--price', 'cheap'], /--price must be a USD amount/],
     ['a bad --timeout', ['sell', 'check', url, '--timeout', '0'], /--timeout must be a positive integer/],
     ['a bad URL', ['sell', 'check', 'not a url'], /not a URL/],
+    ['no URL and no --pricing', ['sell', 'check'], /missing <url> \(or --pricing/],
+    ['a URL and --pricing', ['sell', 'check', url, '--pricing', 'pricing.md'], /either a <url> or --pricing, not both/],
+    ['--price with --pricing', ['sell', 'check', '--pricing', 'pricing.md', '--price', '$0.001'], /each route is checked against its own Price/],
+    ['-X with --pricing', ['sell', 'check', '--pricing', 'pricing.md', '-X', 'post'], /-X does not apply with --pricing/],
+    ['--pay with --pricing', ['sell', 'check', '--pricing', 'pricing.md', '--pay', '--threshold', '0.01'], /--pay does not apply with --pricing/],
+    ['--base-url without --pricing', ['sell', 'check', url, '--base-url', 'http://x'], /--base-url only applies with --pricing/],
+    ['--param without --pricing', ['sell', 'check', url, '--param', 'a=b'], /--param only applies with --pricing/],
+    ['a --param without =', ['sell', 'check', '--pricing', 'pricing.md', '--param', 'address'], /--param expects name=value/],
+    ['a bad --base-url', ['sell', 'check', '--pricing', 'pricing.md', '--base-url', 'localhost:8788'], /--base-url must be an http\(s\) URL/],
+    ['an unreadable --pricing file', ['sell', 'check', '--pricing', '/nonexistent/pricing.md', '--base-url', 'http://127.0.0.1:9'], /--pricing \/nonexistent\/pricing.md: ENOENT/],
+    ['a negative --free-requests', ['sell', 'check', url, '--free-requests', '-1'], /--free-requests must be an integer from 0 to 1000/],
+    ['a huge --free-requests', ['sell', 'check', url, '--free-requests', '5000'], /--free-requests must be an integer/],
+    ['an unreadable --password-file', ['--password-file', '/nonexistent/pw', 'sell', 'check', url], /--password-file: cannot read \/nonexistent\/pw \(ENOENT\)/],
   ])('exits 2 for %s', async (_name, args, message) => {
     const { code, stderr } = await run(...args);
     expect(code).toBe(2);

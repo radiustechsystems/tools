@@ -34,7 +34,7 @@ Override the URL with `--rpc-url` or `RADIUS_RPC_URL` if you want to point at a 
 
 ## Wallet
 
-On first use, any account-needing command (`wallet address`, `balance`, `sign`, `send`, …) auto-creates a keystore at `~/.radius/keystore.json` with no password set (file mode `0o600`). To opt into a password, run `radius-cli wallet new --force` (or set `RADIUS_PASSWORD` before the first command). The keystore is Web3 Secret Storage v3 — compatible with geth/foundry. The address is cached in `~/.radius/config.json` so `radius-cli wallet address` is a cheap read.
+On first use, any account-needing command (`wallet address`, `balance`, `sign`, `send`, …) auto-creates a keystore at `~/.radius/keystore.json` with no password set (file mode `0o600`). To opt into a password, run `radius-cli wallet new --force` (or set `RADIUS_PASSWORD` before the first command). Commands that unlock the keystore take the password from `--password-file <path>` (one trailing newline ignored), else `RADIUS_PASSWORD`, else a prompt; without a terminal they fail with a message naming those two options instead of prompting. The keystore is Web3 Secret Storage v3 — compatible with geth/foundry. The address is cached in `~/.radius/config.json` so `radius-cli wallet address` is a cheap read.
 
 ```bash
 radius-cli wallet new
@@ -100,17 +100,21 @@ radius-cli sell check http://127.0.0.1:3000/api/report
 radius-cli sell check http://127.0.0.1:3000/api/report --price '$0.001' --probe-head
 radius-cli sell check https://api.example.com/query -X post -d '{"q":1}' --facilitator https://facilitator.example
 radius-cli --json sell check http://127.0.0.1:3000/api/report          # one JSON report on stdout
+radius-cli sell check --pricing pricing.md --base-url http://127.0.0.1:8788 --param address=0x… --param hash=0x…
 RADIUS_HOME=.radius radius-cli sell check https://api.example.com/r --pay --threshold 0.01
+RADIUS_HOME=.radius radius-cli --password-file .radius/password sell check https://api.example.com/r --pay --threshold 0.01   # no terminal
 ```
 
-For each x402 offer it checks that the network is a known preset, the asset is that network's payment asset (or `--sbc` on Radius) with the matching EIP-712 domain, the amount is an atomic integer (equal to `--price` converted with the asset's decimals, which catches 18-decimal mistakes; without `--price`, a price above 1000 per request is a warning), `payTo` is a non-zero address, `resource.url` is the requested URL, and `maxTimeoutSeconds` is a sensible positive integer. It then reads the facilitator's `/supported` (the network's default facilitator, or every `--facilitator <url>` given, with `RADIUS_FACILITATOR_API_KEY` sent as `x-api-key`) and checks that it lists each offer's scheme, network and transfer method. MPP challenges are checked for network, currency, decimals, amount, recipient and expiry, and whether they mirror an x402 offer; a seller without MPP is reported as `info`. Finally it asks the SDK buyer (`createRadiusFetch`, with a throwaway key that never signs) whether it would select the offer.
+For each x402 offer it checks that the network is a known preset, the asset is that network's payment asset (or `--sbc` on Radius) with the matching EIP-712 domain, the amount is an atomic integer (equal to `--price` converted with the asset's decimals, which catches 18-decimal mistakes; without `--price`, a price above 1000 per request is a warning), `payTo` is a non-zero address, `resource.url` is the requested URL, and `maxTimeoutSeconds` is a sensible positive integer. It then reads the facilitator's `/supported` (the network's default facilitator, or every `--facilitator <url>` given, with `RADIUS_FACILITATOR_API_KEY` sent as `x-api-key`) and checks that it lists each offer's scheme, network and transfer method. MPP challenges are checked for network, currency, decimals, amount, recipient and expiry, and whether they mirror an x402 offer; a seller without MPP is reported as `info` (buyers can pay over x402 only; how to add MPP depends on the seller's stack). Finally it asks the SDK buyer (`createRadiusFetch`, with a throwaway key that never signs) whether it would select the offer.
 
 - `-X, --method <verb>`, `-H`, `-d`: the request, as for `wallet pay` (default `GET`).
+- `--free-requests <n>`: free quotas. When the unpaid request is served (`2xx`) with a `RateLimit-Remaining` header (or `X-RateLimit-Remaining`), the route has a free quota rather than no payment at all. `sell check` reports it (`free-quota`: limit, remaining, reset) and, when `RateLimit-Remaining + 1` requests fit within `--free-requests` (default 25), sends that many more unpaid requests to use the quota up, then checks the `402` as usual. If they do not fit, or with `--free-requests 0`, it reports the quota (`warn`, or `info` for `0`) without checking the `402`; neither fails the run. Those requests count against your own quota. A `2xx` without RateLimit headers still fails: the route is served without payment.
+- `--pricing <file|url> [--base-url <url>] [--param name=value…]`: check every route of a project. Reads a Radius Platform `pricing.md` (a local file, such as the text the platform's MCP `get_pricing_md` returns, or its published `http(s)` URL) and checks each route it lists (each listed method; `ANY` as `GET`) against that route's own `Price`, in file order. The base URL is the catalog's `Base URL`, or `--base-url` (which overrides every catalog, and is required while the file says `[Base URL]`). Path parameters come from `--param` (`:address` takes `--param address=0x…`, a `*` wildcard `--param '*=a/b'`); a route with an unfilled parameter is skipped and listed with the `--param` it needs. Output is a report per route and totals; `--json` prints `{source, ok, routes: [{catalog, name, method, path, price, free, url?, skipped?, report?}], summary}`. It exits `1` when a route fails or when no route could be checked. `--price`, `-X` and `--pay` do not apply.
 - `--probe-head`: also send an unpaid `HEAD` and warn when it answers `2xx` (routers serve `HEAD` with the `GET` handler, which x402 routes keyed `GET` do not charge).
-- `--pay --threshold <decimal>`: when every check passed, make one paid request from the local wallet (`RADIUS_HOME` applies) and check that a receipt comes back. It pays on testnet unless `--network mainnet` is passed explicitly; `RADIUS_NETWORK` and the config file do not switch it to mainnet. `--networks` works as for `wallet pay`.
+- `--pay --threshold <decimal>`: when every check passed, make one paid request from the local wallet (`RADIUS_HOME` applies) and check that a receipt comes back. It pays on testnet unless `--network mainnet` is passed explicitly; `RADIUS_NETWORK` and the config file do not switch it to mainnet. `--networks` works as for `wallet pay`. A password-protected keystore is unlocked with `--password-file <path>` or `RADIUS_PASSWORD`; without either and without a terminal (an agent, CI), it exits `2` before any request instead of prompting.
 - `--timeout <ms>`: per request, default 15000. The paid request of `--pay` gets four times that (at least 60 s), since the seller settles before it answers; if it still fails after the payment was sent, the message says the payment may have settled.
 
-Each check prints as `ok`, `warn`, `FAIL`, `skip` or `info`. Exit code `0` means no check failed (warnings allowed), `1` that one did, `2` invalid flags (a malformed `-H`, an unreadable `-d @file`, an unknown `--network`/`--networks`, a bad `--price` or `--threshold`).
+Each check prints as `ok`, `warn`, `FAIL`, `skip` or `info`. Exit code `0` means no check failed (warnings allowed), `1` that one did, `2` invalid flags (a malformed `-H`, an unreadable `-d @file`, an unknown `--network`/`--networks`, a bad `--price`, `--threshold`, `--free-requests`, `--base-url` or `--param`, an unreadable `--pricing` or `--password-file`, or `--pay` with a locked keystore and no terminal).
 
 ## Read commands
 
@@ -176,7 +180,7 @@ Per-command JSON shapes:
 | `wallet balance` | `{address, totalUsd, sbc, rusd, sbcWei, rusdWei, aggregateWei, rusdSource, sbcError}` |
 | `wallet send` | `{hash, receipt?}` (no `receipt` with `--no-wait`) |
 | `wallet pay` | `{status, headers, body, bodyEncoding, payment}` (`payment.network` is the CAIP-2 network paid on) |
-| `sell check` | `{url, method, ok, status, x402Version, resource, offers, mpp, facilitators, payment?, checks: [{id, status, message}], summary}` (exit 1 when `ok` is false) |
+| `sell check` | `{url, method, ok, status, x402Version, resource, offers, mpp, facilitators, payment?, freeQuota?, checks: [{id, status, message}], summary}` (exit 1 when `ok` is false); with `--pricing`, `{source, ok, routes, summary}` |
 | `call` | decoded return value (single value or array) |
 | `tx` | the full transaction object |
 | `receipt` | the full receipt object |
@@ -191,7 +195,7 @@ Errors continue to go to stderr as `error: <message>` with a non-zero exit code;
 
 In priority order (highest first):
 
-1. **CLI flag** — `--network`, `--rpc-url`, `--private-key`, `--sbc`, `--rusd`, `--json`
+1. **CLI flag** — `--network`, `--rpc-url`, `--private-key`, `--password-file`, `--sbc`, `--rusd`, `--json`
 2. **Environment** — `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_FACILITATOR_API_KEY` (`sell check`), `RADIUS_PASSWORD`, `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`
 3. **`~/.radius/config.json`** — fields: `network`, `rpcUrl`, `sbcAddress`, `rusdAddress`, `payNetworks` (e.g. `["radius", "base"]`), `rpcUrls` (`{ "base": …, "base-sepolia": … }`)
 4. **Built-in defaults** — mainnet

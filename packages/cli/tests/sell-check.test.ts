@@ -3,7 +3,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { generatePrivateKey } from 'viem/accounts';
 import { resolveNetwork } from 'radius-sdk';
 import { radiusPayments, type RadiusPaymentsOptions } from 'radius-sdk/server';
-import { checkSeller, type SellCheckReport } from '../src/lib/sellCheck.js';
+import { checkSeller, readRateLimit, type SellCheckReport } from '../src/lib/sellCheck.js';
+import { checkRoutes } from '../src/lib/sellCheckRoutes.js';
+import { parsePricingMd } from '../src/lib/pricingMd.js';
 
 // A real radius-sdk seller over loopback HTTP, a mock facilitator and a mock JSON-RPC node. Nothing
 // leaves the machine; "settlement" is the mock facilitator saying so.
@@ -109,6 +111,11 @@ describe('radius-cli sell check', () => {
     const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } })}/api/report`, facilitators: [fac.url] });
     expect(report.ok).toBe(true);
     expect(statusOf(report, 'mpp')).toBe('info');
+    // SDK-neutral: says what it means for buyers, and names radius-sdk only as one way to add MPP.
+    const mpp = report.checks.find((c) => c.id === 'mpp')!.message;
+    expect(mpp).toMatch(/buyers can pay over x402 only/);
+    expect(mpp).toMatch(/seller's payment setup \(with radius-sdk: mpp: \{ secretKey \}/);
+    expect(mpp).not.toMatch(/upstream x402 adapters/);
     expect(report.mpp).toEqual([]);
     expect(statusOf(report, 'buyer.mpp')).toBeUndefined();
   });
@@ -158,7 +165,139 @@ describe('radius-cli sell check', () => {
     const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } })}/health`, facilitators: [fac.url] });
     expect(report.ok).toBe(false);
     expect(report.status).toBe(200);
-    expect(report.checks).toEqual([expect.objectContaining({ id: 'status', status: 'fail', message: expect.stringMatching(/served without payment/) })]);
+    expect(report.checks).toEqual([expect.objectContaining({ id: 'status', status: 'fail', message: expect.stringMatching(/served without payment and without RateLimit headers, so it is not a free quota/) })]);
+    expect(report.freeQuota).toBeUndefined();
+  });
+
+  describe('free quotas', () => {
+    /**
+     * A radius-sdk seller behind a free quota of `limit` unpaid requests: each is served 200 with
+     * RateLimit headers, as the Radius Platform's policy sends them; after that the 402 comes through.
+     */
+    async function quotaSeller(limit: number, headers: (remaining: number) => Record<string, string> = (remaining) => ({ 'RateLimit-Limit': String(limit), 'RateLimit-Remaining': String(remaining), 'RateLimit-Reset': '42' })) {
+      const fac = await facilitator(radiusKinds);
+      const counter = { requests: 0 };
+      const url = `${await seller({ facilitator: { url: fac.url } }, (res) => {
+        counter.requests++;
+        if (counter.requests > limit) return res;
+        return Response.json({ free: true }, { headers: headers(limit - counter.requests) });
+      })}/api/report`;
+      return { fac, url, counter };
+    }
+
+    it('reads RateLimit headers, and their X-RateLimit form', () => {
+      expect(readRateLimit(new Headers({ 'RateLimit-Limit': '10', 'RateLimit-Remaining': '9', 'RateLimit-Reset': '50' }))).toEqual({ limit: 10, remaining: 9, resetSeconds: 50 });
+      expect(readRateLimit(new Headers({ 'X-RateLimit-Remaining': '3' }))).toEqual({ remaining: 3, limit: undefined, resetSeconds: undefined });
+      expect(readRateLimit(new Headers({ 'RateLimit-Limit': '10' }))).toBeUndefined();
+      expect(readRateLimit(new Headers({ 'RateLimit-Remaining': 'lots' }))).toBeUndefined();
+    });
+
+    it('uses up the quota, then checks the 402', async () => {
+      const { fac, url, counter } = await quotaSeller(10);
+      const report = await checkSeller({ url, price: '$0.001', facilitators: [fac.url] });
+      expect(failed(report)).toEqual([]);
+      expect(report.ok).toBe(true);
+      expect(report.status).toBe(402);
+      expect(report.freeQuota).toEqual({ limit: 10, remaining: 0, resetSeconds: 42, served: 10, exhausted: true });
+      expect(report.checks.find((c) => c.id === 'free-quota')).toMatchObject({ status: 'info', message: expect.stringMatching(/10 unpaid GET requests were served \(limit 10, 0 remaining, resets in 42 s\), then 402/) });
+      expect(report.checks.find((c) => c.id === 'status')?.message).toMatch(/answers 402 once the free quota is used up/);
+      expect(statusOf(report, 'offer[0].amount')).toBe('pass');
+      // The 10 free answers and the 402: nothing more.
+      expect(counter.requests).toBe(11);
+    });
+
+    it('with --free-requests 0, reports the quota without spending it and does not fail', async () => {
+      const { url, counter } = await quotaSeller(10);
+      const report = await checkSeller({ url, freeRequests: 0 });
+      expect(report.ok).toBe(true);
+      expect(report.status).toBe(200);
+      expect(report.offers).toEqual([]);
+      expect(report.freeQuota).toMatchObject({ limit: 10, remaining: 9, served: 1, exhausted: false });
+      expect(report.checks).toEqual([expect.objectContaining({ id: 'free-quota', status: 'info', message: expect.stringMatching(/a free quota, not used up \(--free-requests 0\), so the 402 was not checked/) })]);
+      expect(counter.requests).toBe(1);
+    });
+
+    it('does not start on a quota larger than --free-requests, and warns', async () => {
+      const { url, counter } = await quotaSeller(50);
+      const report = await checkSeller({ url });
+      expect(report.ok).toBe(true);
+      expect(report.checks).toEqual([expect.objectContaining({ id: 'free-quota', status: 'warn', message: expect.stringMatching(/takes 50 more unpaid requests, more than --free-requests 25/) })]);
+      expect(counter.requests).toBe(1);
+      // Raised, it gets there (49 free answers left: the first run used one).
+      const raised = await checkSeller({ url, freeRequests: 60, facilitators: ['http://127.0.0.1:9'], timeoutMs: 1000 });
+      expect(raised.freeQuota).toMatchObject({ served: 49, exhausted: true });
+      expect(counter.requests).toBe(51);
+      expect(statusOf(raised, 'status')).toBe('pass');
+    });
+
+    it('stops at --free-requests when the headers never run out, and warns', async () => {
+      const { url, counter } = await quotaSeller(1000, () => ({ 'RateLimit-Remaining': '1' }));
+      const report = await checkSeller({ url, freeRequests: 5 });
+      expect(report.ok).toBe(true);
+      expect(report.checks.find((c) => c.id === 'free-quota')).toMatchObject({ status: 'warn', message: expect.stringMatching(/still served after 6 unpaid requests \(--free-requests 5\)/) });
+      expect(counter.requests).toBe(6);
+    });
+  });
+
+  describe('every route of a pricing.md', () => {
+    const pricing = (base: string) => [
+      '# Acme pricing',
+      '',
+      '## Chain \\*data\\*',
+      '',
+      `- Base URL: ${base}`,
+      '- Payment: x402, SBC on Radius testnet',
+      '',
+      '### Wallet history',
+      '',
+      '- Request: `GET /wallet/:address`',
+      '- Price: $0.001 / request',
+      '- Free: 2 requests per minute per IP',
+      '',
+      '### Transaction',
+      '',
+      '- Request: `GET /tx/:transfer_type/:hash`',
+      '- Price: $0.002 / request',
+      '',
+      '### Value types',
+      '',
+      '- Request: `GET /value/:id`',
+      '- Price: $0.001 / request',
+      '',
+    ].join('\n');
+
+    it('checks each route against its own price, skips unfilled parameters and totals the results', async () => {
+      const fac = await facilitator(radiusKinds);
+      // The seller charges 0.001 SBC everywhere, so the Transaction route (listed at $0.002) fails.
+      let walletRequests = 0;
+      const base = await seller({ facilitator: { url: fac.url }, routes: { 'GET /wallet/*': { price: '$0.001' }, 'GET /tx/*': { price: '$0.001' }, 'GET /value/*': { price: '$0.001' } } }, (res) => {
+        if (res.status === 402 && new URL(JSON.parse(Buffer.from(res.headers.get('payment-required')!, 'base64').toString()).resource.url).pathname.startsWith('/wallet/') && ++walletRequests <= 2) {
+          return Response.json({ free: true }, { headers: { 'RateLimit-Limit': '2', 'RateLimit-Remaining': String(2 - walletRequests), 'RateLimit-Reset': '60' } });
+        }
+        return res;
+      });
+      const routes = parsePricingMd(pricing('[Base URL]'));
+      const seen: string[] = [];
+      const result = await checkRoutes('pricing.md', routes, { address: '0xabc', hash: '0x01', transfer_type: 'radius' }, base, { facilitators: [fac.url] }, (r) => seen.push(r.path));
+      expect(seen).toEqual(['/wallet/:address', '/tx/:transfer_type/:hash', '/value/:id']);
+      expect(result.ok).toBe(false);
+      expect(result.summary.routes).toEqual({ checked: 2, passed: 1, failed: 1, skipped: 1 });
+      const [wallet, tx, value] = result.routes;
+      expect(wallet).toMatchObject({ catalog: 'Chain *data*', name: 'Wallet history', method: 'GET', price: '$0.001', free: '2 requests per minute per IP', url: `${base}/wallet/0xabc` });
+      expect(wallet!.report).toMatchObject({ ok: true, freeQuota: { limit: 2, served: 2, exhausted: true } });
+      expect(tx!.url).toBe(`${base}/tx/radius/0x01`);
+      expect(tx!.report!.checks.find((c) => c.id === 'offer[0].amount')).toMatchObject({ status: 'fail', message: expect.stringMatching(/expected \$0.002/) });
+      expect(value).toMatchObject({ skipped: "no value for :id; pass --param 'id=…'" });
+      expect(value!.report).toBeUndefined();
+      expect(result.summary.checks.fail).toBe(1);
+    });
+
+    it('skips every route without a base URL, and is not ok when nothing was checked', async () => {
+      const result = await checkRoutes('pricing.md', parsePricingMd(pricing('[Base URL]')), {}, undefined, {});
+      expect(result.ok).toBe(false);
+      expect(result.summary.routes).toEqual({ checked: 0, passed: 0, failed: 0, skipped: 3 });
+      expect(result.routes[0]!.skipped).toMatch(/has no Base URL; pass --base-url/);
+    });
   });
 
   it('fails a challenge bound to another resource or paying a zero address', async () => {
