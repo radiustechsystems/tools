@@ -22,7 +22,8 @@
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page",
   },
-  // Per-PR preview URLs come from `wrangler versions upload --preview-alias`.
+  // The workers.dev URL, and Version URLs for `wrangler versions upload`. Cloudflare generates no Version URL for a
+  // Worker that implements a Durable Object, so PR previews are Worker Previews: see "previews" below.
   "workers_dev": true,
   "preview_urls": true,
   // Recipient of the testnet payments made from the interactive "Try Radius" components: the testnet
@@ -39,8 +40,8 @@
   // radius-docs-RADIUS_POLICY`) before this merges.
   "kv_namespaces": [{ "binding": "RADIUS_POLICY", "id": "9f366bad84104aea97407a8959880653" }],
   // Exact counts for the policy's free quotas and rate limits, and payment claims. A new Durable Object class
-  // needs a migration, which `wrangler versions upload` (PR previews) can't apply: the first deploy with it
-  // must be `wrangler deploy`.
+  // needs a migration: production applies it with `wrangler deploy`, and `wrangler preview` applies it to each
+  // Preview's own namespace.
   "durable_objects": { "bindings": [{ "name": "RADIUS_LIMITER", "class_name": "RadiusCounter" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RadiusCounter"] }],
   // Syncs the policy every minute, so a change on the platform applies within about two minutes.
@@ -58,6 +59,29 @@
       "enabled": true,
       "invocation_logs": true,
       "head_sampling_rate": 1,
+    },
+  },
+  // Per-PR Previews (`wrangler preview --name pr-<number>` in .github/workflows/docs.yml). A Preview inherits none
+  // of the settings above except assets, compatibility settings and the Durable Object classes and migrations,
+  // so this block repeats every binding worker/index.ts reads. Each Preview gets its own RadiusCounter namespace
+  // and storage, deleted with the Preview. Cron Triggers don't run on Previews, so nothing syncs the policy here:
+  // a Preview only reads RADIUS_POLICY, so it shares the production namespace and enforces the live policy.
+  // Agent data points land in the production dataset; filter Previews out by host.
+  // Ref: https://developers.cloudflare.com/workers/previews/configuration/
+  "previews": {
+    "vars": {
+      "TRY_PAY_TO": "0x0fD9Ba4a476C7f544cC9b04e54D6B7bb53F2f568",
+      "RADIUS_PROJECT_ID": "01a19d11-7c95-74ac-af09-3d8037ae7625",
+    },
+    "kv_namespaces": [{ "binding": "RADIUS_POLICY", "id": "9f366bad84104aea97407a8959880653" }],
+    "durable_objects": { "bindings": [{ "name": "RADIUS_LIMITER", "class_name": "RadiusCounter" }] },
+    "analytics_engine_datasets": [{ "binding": "AGENT_FETCHES", "dataset": "docs_agent_fetches" }],
+    "observability": {
+      "logs": {
+        "enabled": true,
+        "invocation_logs": true,
+        "head_sampling_rate": 1,
+      },
     },
   },
 }
