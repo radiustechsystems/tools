@@ -37,7 +37,7 @@
   // The compiled policy, written by the sync and read on every agent request.
   // TODO: replace with the id of a namespace created in the Radius account (`wrangler kv namespace create
   // radius-docs-RADIUS_POLICY`) before this merges.
-  "kv_namespaces": [{ "binding": "RADIUS_POLICY", "id": "REPLACE_WITH_RADIUS_POLICY_KV_ID" }],
+  "kv_namespaces": [{ "binding": "RADIUS_POLICY", "id": "9f366bad84104aea97407a8959880653" }],
   // Exact counts for the policy's free quotas and rate limits, and payment claims. A new Durable Object class
   // needs a migration, which `wrangler versions upload` (PR previews) can't apply: the first deploy with it
   // must be `wrangler deploy`.
