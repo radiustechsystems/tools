@@ -51,6 +51,9 @@ importers:
 
   packages/docs:
     dependencies:
+      '@radiustech/platform-sdk':
+        specifier: ^0.1.0
+        version: 0.1.0(@cloudflare/workers-types@5.20261013.1)
       '@x402/core':
         specifier: 2.29.0
         version: 2.29.0
@@ -1908,6 +1911,14 @@ packages:
 
   '@poppinss/exception@1.2.3':
     resolution: {integrity: sha512-dCED+QRChTVatE9ibtoaxc+WkdzOSjYTKi/+uacHWIsfodVfpsueo3+DKpgU5Px8qXjgmXkSvhXvSCz3fnP9lw==}
+
+  '@radiustech/platform-sdk@0.1.0':
+    resolution: {integrity: sha512-oryWbW26a+YfwGS0O+4CL5ru/HV+JXxlpXHYVnrxQe4vmOJ+DWj0j+CsM5gJIwDNN3DlVVH+7GYGGhfl4sQtPA==}
+    peerDependencies:
+      '@cloudflare/workers-types': '>=4.20240405.0'
+    peerDependenciesMeta:
+      '@cloudflare/workers-types':
+        optional: true
 
   '@react-hook/intersection-observer@3.1.2':
     resolution: {integrity: sha512-mWU3BMkmmzyYMSuhO9wu3eJVP21N8TcgYm9bZnTrMwuM818bEk+0NRM3hP+c/TqA9Ln5C7qE53p1H0QMtzYdvQ==}
@@ -8274,6 +8285,12 @@ snapshots:
       supports-color: 10.2.2
 
   '@poppinss/exception@1.2.3': {}
+
+  '@radiustech/platform-sdk@0.1.0(@cloudflare/workers-types@5.20261013.1)':
+    dependencies:
+      '@x402/core': 2.29.0
+    optionalDependencies:
+      '@cloudflare/workers-types': 5.20261013.1
 
   '@react-hook/intersection-observer@3.1.2(react@19.3.0)':
     dependencies:
