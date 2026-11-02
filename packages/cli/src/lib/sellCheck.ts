@@ -471,7 +471,8 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
     else add(`buyer.${protocol}`, 'fail', `a radius-sdk buyer refuses it: ${selected.code}: ${selected.message}`);
   }
 
-  // 8. HEAD: x402 route verbs match exactly, so a router answering HEAD with the GET handler runs it unpaid.
+  // 8. HEAD: a router answers HEAD with the GET handler; servers that match route verbs exactly (@x402/core
+  // before 2.29, other x402 servers) run it unpaid.
   if (options.probeHead) {
     try {
       const head = await baseFetch(new Request(options.url, { method: 'HEAD', headers: options.headers, redirect: 'manual' }));
