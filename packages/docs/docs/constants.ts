@@ -19,6 +19,8 @@ export const STABLECOIN_DECIMALS = 6;
 export const NATIVE_TOKEN_DECIMALS = 18;
 
 // URLs
+// Radius Merchant Console, the main call to action of the site banner and /merchant-console
+export const MERCHANT_CONSOLE_URL = 'https://app.radiustech.xyz?tabs=1';
 export const FAUCET_DASHBOARD_PATH = '/wallet';
 export const FAUCET_TESTNET_API_URL = 'https://testnet.radiustech.xyz/api/v1/faucet';
 

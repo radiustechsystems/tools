@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import { remarkLlmOutput } from './docs/remark-llm-output.js';
 import { rehypePageActions } from './docs/rehype-page-actions.js';
 import { AREAS as AREA_LIST } from './docs/areas.js';
+import { MERCHANT_CONSOLE_URL } from './docs/constants.js';
 
 const SITE_BASE_URL = 'https://docs.radiustech.xyz';
 const PROJECT_ROOT = findProjectRoot();
@@ -37,6 +38,7 @@ const DISCOVER_SIDEBAR: SidebarItem[] = [
   { text: 'Overview', link: '/' },
   { text: 'Why Radius', link: '/why-radius' },
   { text: 'Try Radius', link: '/try' },
+  { text: 'Merchant Console', link: '/merchant-console' },
   {
     text: 'Architecture',
     collapsed: false,
@@ -442,6 +444,12 @@ export default defineConfig({
   checkDeadlinks: 'warn',
   title: SITE_NAME,
   description: SITE_DESCRIPTION,
+  // Fixed above the top nav on every page; Vocs offsets the layout by its height and remembers a dismissal
+  // in localStorage. The banner supports only text and links, so _root.css styles the two links as buttons.
+  banner: {
+    content: `Sell your API to agents with the Radius Merchant Console. [Open Merchant Console](${MERCHANT_CONSOLE_URL}) [Learn more](/merchant-console)`,
+    dismissId: 'merchant-console-2026-11',
+  },
   logoUrl: {
     light: '/logo-light.svg',
     dark: '/logo-dark.svg',
