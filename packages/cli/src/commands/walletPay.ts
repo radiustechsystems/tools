@@ -112,6 +112,9 @@ type Refusal =
   | { kind: 'approval-no-tty' }
   | { kind: 'approval-declined' };
 
+// runPay sets process.exitCode and returns instead of calling process.exit(): on a pipe, stdout is
+// written asynchronously, and exiting right after a large write (a --json envelope, a body) drops
+// whatever is still buffered.
 async function runPay(
   verbArg: string,
   url: string,
@@ -121,7 +124,8 @@ async function runPay(
   const verb = verbArg.toLowerCase();
   if (!isSupportedVerb(verb)) {
     process.stderr.write(`pay: unsupported verb '${verbArg}' (use one of ${SUPPORTED_VERBS.join(', ')})\n`);
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
   const method = verb.toUpperCase();
 
@@ -135,7 +139,8 @@ async function runPay(
   const initial = await runRequest(verb as HttpVerb, url, { headers: reqHeaders, body });
   if (initial.status !== 402) {
     emit(initial, null, !!opts.json, !!subOpts.include);
-    process.exit(initial.status >= 400 ? 1 : 0);
+    process.exitCode = initial.status >= 400 ? 1 : 0;
+    return;
   }
 
   const cfg = resolveConfig(opts);
@@ -271,16 +276,15 @@ async function runPay(
     });
   } catch (e) {
     if (!(e instanceof RadiusPaymentError)) throw e;
-    process.exit(
-      await reportPaymentError(e, {
-        refusal,
-        offer,
-        networks,
-        payer: account.address,
-        challengeBody: initial.body,
-        json: !!opts.json,
-      }),
-    );
+    process.exitCode = await reportPaymentError(e, {
+      refusal,
+      offer,
+      networks,
+      payer: account.address,
+      challengeBody: initial.body,
+      json: !!opts.json,
+    });
+    return;
   }
 
   const paid: HttpResponse = {
@@ -296,13 +300,15 @@ async function runPay(
         'Re-run with --approve-permit2 to grant it.\n',
     );
     process.stderr.write(safeBodyPreview(paid.body));
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   if (!offer) {
     // The SDK only retries after onPaymentRequired approved an offer.
     process.stderr.write('pay: internal error: response returned without an approved offer.\n');
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const receipt = getPaymentReceipt(res, offer.network);
@@ -315,7 +321,7 @@ async function runPay(
   }
 
   emit(paid, summary, !!opts.json, !!subOpts.include);
-  process.exit(paid.status >= 400 ? 1 : 0);
+  process.exitCode = paid.status >= 400 ? 1 : 0;
 }
 
 function summarize(
