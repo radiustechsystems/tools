@@ -170,7 +170,7 @@ The site is the `radius-docs` Cloudflare Worker (`wrangler.jsonc`). Workers stat
 
 The `docs.radiustech.xyz` custom domain is managed in the Cloudflare dashboard, not in `wrangler.jsonc`: listing it there makes `wrangler deploy` call the custom-domains API, which needs zone and DNS permissions the CI token deliberately lacks.
 
-- `.github/workflows/docs.yml`: format, lint, typecheck, validators, build, `docs:agent-check` and `docs:sitemap-check` on pull requests; same-repo pull requests get a preview Worker version (`pr-<number>` alias, URL commented on the PR).
+- `.github/workflows/docs.yml`: format, lint, typecheck, validators, build, `docs:agent-check` and `docs:sitemap-check` on pull requests; same-repo pull requests get a Worker Preview (`wrangler preview --name pr-<number>`, URL commented on the PR, deleted when the PR closes). Previews take their bindings from the `previews` block in `wrangler.jsonc`, not the top level: add a new binding to both. They are not Version URLs (`wrangler versions upload`), which Cloudflare does not generate for a Worker that implements a Durable Object.
 - `.github/workflows/docs-deploy.yml`: production. Called by `release.yml` after every npm publish, or run by hand for a docs-only release (refused while `radius-sdk`/`radius-cli` changesets are pending). Moves the `docs-live` tag to the deployed commit; it refuses to deploy a ref that does not contain `docs-live`'s commits. Live fee constants are fetched (`pnpm fetch-cost`) only there.
 
 ---
