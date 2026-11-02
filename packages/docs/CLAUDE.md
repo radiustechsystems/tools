@@ -193,7 +193,7 @@ Three areas, each with its own sidebar in `vocs.config.ts`; the area list is in 
 
 | Area      | URL prefix   | Pages (`docs/pages/`)                                                                                                                                                                                                           |
 | --------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discover  | `/`          | `index.mdx`, `why-radius.mdx`, `try.mdx`, `architecture/*.mdx`, `solutions/*.mdx`, `release-notes.mdx`                                                                                                                          |
+| Discover  | `/`          | `index.mdx`, `why-radius.mdx`, `try.mdx`, `merchant-console.mdx`, `architecture/*.mdx`, `solutions/*.mdx`, `release-notes.mdx`                                                                                                  |
 | Build     | `/build`     | `build/index.mdx`, `accept-payments.mdx`, `make-payments/*.mdx`, `tutorials/*.mdx`, `x402.mdx`, `wallet.mdx`, `claim-and-transact.mdx`, `bridge.mdx`, `dashboard.mdx`, `coding-assistants.mdx`, `tooling.mdx`, `examples/*.mdx` |
 | Reference | `/reference` | `reference/index.mdx`, `radius-sdk.mdx`, `radius-cli.mdx`, `facilitator-api.mdx`, `network.mdx`, `fees.mdx`, `contract-addresses.mdx`, `ethereum-compatibility.mdx`, `json-rpc/index.mdx`, `json-rpc/methods.mdx`               |
 

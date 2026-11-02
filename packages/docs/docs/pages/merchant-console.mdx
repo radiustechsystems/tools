@@ -1,0 +1,121 @@
+---
+title: Merchant Console
+description: Import an OpenAPI spec, price each endpoint, and get paid when agents call your API. The Radius Merchant Console is open to early users through a waitlist.
+---
+
+import { MERCHANT_CONSOLE_URL } from '../constants';
+
+# Merchant Console [Sell your API to agents in five steps]
+
+The Radius Merchant Console turns an API or MCP server into a catalog of priced endpoints that agents can pay for. You import an OpenAPI spec, set a price per call, and choose the wallet that gets paid.
+
+- **Import, price, get paid.** Your OpenAPI spec becomes priced endpoints on one review screen, and payments settle to a wallet you register.
+- **The policy is the pricing engine.** Prices live in a policy the platform serves. Four lines of SDK in your Worker fetch it every minute and enforce it on each request.
+- **An agent can run your pricing.** Connect the Radius platform MCP server to Claude Code or another agent, and ask it to reprice endpoints from your traffic, once or on a schedule.
+
+<div className="mc-cta">
+  <a className="mc-cta__primary" href={MERCHANT_CONSOLE_URL}>
+    Open Merchant Console
+  </a>
+  <a href="#join-the-waitlist">Join the waitlist</a>
+</div>
+
+:::note[About the screenshots]
+The screens below follow a made-up publisher, Newsroom API, through the console. Every label and button is the console's; the traffic figures in step 5 are illustrative.
+:::
+
+## 1. Create a project
+
+A project is the catalog of endpoints or MCP tools you sell: one per API or MCP server.
+
+The empty dashboard lays out the whole path: create a project, add resources, set prices, and publish them to `pricing.md` so agents can read every price in one file. Creating the project moves the **Next step** marker to **Add resources**.
+
+<img className="mc-shot" src="/imgs/merchant-console/dashboard.png" alt="Merchant Console dashboard with no catalogs yet: Create a project is done, Add resources is the next step, then Set prices and Publish to pricing.md" width="1440" height="1042" />
+
+## 2. Import your OpenAPI spec
+
+Paste or upload your OpenAPI definition on the **Policy** page. Each operation becomes an endpoint with a suggested rule: a charge for reads and writes, free for health checks. Nothing is saved until you review the endpoints. The **Agent** tab gives the same import as a prompt for an agent.
+
+<img className="mc-shot" src="/imgs/merchant-console/import.png" alt="Import an OpenAPI spec screen with Paste, Upload and Agent tabs and the Newsroom API spec pasted in" width="1440" height="1122" />
+
+## 3. Choose starting prices and a payout wallet
+
+Set a default price per call, apply it to every charged endpoint, pick the wallet that gets paid, and create the endpoints. The console saves them as a new version of the project's policy.
+
+These prices are starting points, not commitments. Prices are meant to move, closer to dynamic pricing than a rate card; [step 5](#5-let-an-agent-set-the-prices) shows how.
+
+<img className="mc-shot" src="/imgs/merchant-console/review.png" alt="Review 4 endpoints screen: three GET endpoints charged at 0.002 per call, the health check free, payouts to the Treasury wallet, and a confirmation that the policy was saved as v2" width="1440" height="1122" />
+
+| Payout                                                        | Status    |
+| ------------------------------------------------------------- | --------- |
+| A wallet address you register (**Wallets → Register wallet**) | Available |
+| Settlement to a bank account                                  | Planned   |
+
+## 4. Enforce the policy in your Worker
+
+Your Worker pulls in the policy as a remote policy and enforces it on every request. The policy is a short document: who gets paid, which networks and assets are accepted, and one rule per endpoint.
+
+`withRadius` from `@radiustech/platform-sdk` syncs the policy on a one-minute cron and allows, denies, rate-limits or charges each request over [x402](/build/x402). A price change in the console or from an agent reaches the Worker without a deploy.
+
+```ts
+// src/index.ts
+import { withRadius } from '@radiustech/platform-sdk';
+export { RadiusCounter } from '@radiustech/platform-sdk/limiters/do';
+
+export default withRadius({
+  async fetch(request, env, ctx) {
+    return handle(request, env);
+  },
+});
+```
+
+The Worker also needs:
+
+- `RADIUS_PROJECT_ID`, the project whose policy it enforces
+- An organization API key with `endpoints:read`, as the secret `RADIUS_API_KEY`
+- A KV namespace bound as `RADIUS_POLICY`
+- The `RadiusCounter` Durable Object, bound as `RADIUS_LIMITER`
+
+Hono apps use the `radiusPolicy()` middleware instead of `withRadius`.
+
+<img className="mc-shot" src="/imgs/merchant-console/policy-sdk.png" alt="The Newsroom API policy, version 2, with a charge rule per endpoint, next to src/index.ts wrapped in withRadius and a Policy v2 synced status" width="1440" height="882" />
+
+## 5. Let an agent set the prices
+
+Add the Radius platform connector to Claude Code or another agent, then ask in plain words.
+
+```bash
+claude mcp add --transport http radius-platform https://platform-api.radiustech.xyz/mcp
+```
+
+The agent signs in as you and acts with your permissions. It reads the current policy with `get_policy` and changes prices with `update_endpoint`; each change saves a new policy version that the Worker picks up within a minute.
+
+<img className="mc-shot" src="/imgs/merchant-console/agent.png" alt="Claude Code session connected to radius-platform: the agent reads 24 hours of request logs, calls get_policy, then update_endpoint twice to raise the prices of the two most-crawled endpoints, and reports that the policy is now v4" width="1440" height="822" />
+
+The platform's MCP tools manage projects, endpoints, policy, wallets and `pricing.md`. They don't serve traffic data yet, so the agent reads request counts from your own logs or analytics.
+
+### Run pricing on a schedule
+
+The same request can run on a schedule, so pricing follows demand without anyone watching it:
+
+1. **Read the last day of traffic** from your logs or analytics: which endpoints bots and agents hit, and how often.
+2. **Compare with the policy.** `get_policy` returns the current rules and prices.
+3. **Reprice what changed** with `update_endpoint` per endpoint. Each save is a new policy version you can review in the console.
+4. **Enforce without a deploy.** The Worker syncs the new version within a minute.
+
+:::tip[Start in test mode]
+A project stays in TEST until someone uses **Switch to production**, so you can check an agent's prices on testnet before they take real money.
+:::
+
+## Join the waitlist
+
+Access to the Merchant Console is by waitlist. The waitlist is open at app.radiustech.xyz, and Radius is inviting early beta users now.
+
+<div className="mc-cta">
+  <a className="mc-cta__primary" href={MERCHANT_CONSOLE_URL}>
+    Join the waitlist
+  </a>
+  <a href="https://www.radiustech.xyz/contact">Contact Radius</a>
+</div>
+
+To learn how agents pay for a priced request, see [accept payments](/build/accept-payments) and [x402 payments](/build/x402).
