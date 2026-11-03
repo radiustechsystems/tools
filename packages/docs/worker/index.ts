@@ -100,8 +100,14 @@ function varyOnAccept(res: Response): Response {
 // AI search, AI assistants and SEO tools are gated like any other agent.
 const UNGATED_BOTS = new Set(['Search Engine Crawler', 'Page Preview', 'Monitoring & Analytics', 'Webhooks']);
 
+// The id of the policy rule that decided each gated request, for `record()`. Keyed by the request
+// object `serveSite` hands the gate, so nothing outlives the request.
+const decidedBy = new WeakMap<Request, string>();
+
 // Enforces the project's policy, synced from the platform into RADIUS_POLICY by the cron trigger.
-const radius = createHandle<Env['Bindings']>();
+const radius = createHandle<Env['Bindings']>({
+  onDecision: (decision, request) => decidedBy.set(request, decision.rule ?? ''),
+});
 
 // Serves pages and agent files, records the requests agents make, and gates agents with the policy.
 //
@@ -154,12 +160,18 @@ function record(request: Request, res: Response, env: Env['Bindings']) {
     asOrganization: String(request.cf?.asOrganization ?? ''),
     host: url.hostname,
     contentType: (res.headers.get('content-type') ?? '').split(';')[0]!.trim(),
+    ...identitySignals(request),
+    rule: decidedBy.get(request) ?? '',
   };
   console.log(JSON.stringify({ message: 'agent fetch', ...entry }));
   // Column order is the query schema for the `docs_agent_fetches` dataset: keep it append-only.
   // blob1 path, blob2 method, blob3 user agent, blob4 referer, blob5 country, blob6 AS organization,
   // blob7 host (filter on docs.radiustech.xyz: previews write here too), blob8 content type served
-  // (`text/markdown` on a page path means the agent negotiated Markdown); double1 HTTP status.
+  // (`text/markdown` on a page path means the agent negotiated Markdown), blob9 Cloudflare's verified
+  // bot category, blob10 Cloudflare's signed-agent flag (`true`, `false`, or empty when the zone has no
+  // Bot Management), blob11 the `Signature-Agent` header (Web Bot Auth; empty when absent), blob12 the
+  // id of the policy rule that decided the request (empty when it wasn't gated or no rule matched);
+  // double1 HTTP status.
   // The path is the index (sampling key).
   env.AGENT_FETCHES.writeDataPoint({
     indexes: [entry.path.slice(0, 96)],
@@ -172,9 +184,25 @@ function record(request: Request, res: Response, env: Env['Bindings']) {
       entry.asOrganization,
       entry.host,
       entry.contentType,
+      entry.verifiedBotCategory,
+      entry.signedAgent,
+      entry.signatureAgent,
+      entry.rule,
     ],
     doubles: [entry.status],
   });
+}
+
+// Who the agent says it is, and what Cloudflare vouches for. `botManagement` is only set with
+// Cloudflare Bot Management, so its fields may be missing on this zone: that's what this records.
+function identitySignals(request: Request) {
+  const cf = request.cf as { verifiedBotCategory?: unknown; botManagement?: { signedAgent?: unknown } } | undefined;
+  const signed = cf?.botManagement?.signedAgent;
+  return {
+    verifiedBotCategory: String(cf?.verifiedBotCategory ?? ''),
+    signedAgent: typeof signed === 'boolean' ? String(signed) : '',
+    signatureAgent: (request.headers.get('signature-agent') ?? '').slice(0, 256),
+  };
 }
 
 export default {
