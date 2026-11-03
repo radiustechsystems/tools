@@ -94,6 +94,37 @@ export function resolvePayNetworks(cfg: ResolvedConfig, flag?: string): PaymentN
   });
 }
 
+/** Where the Web Bot Auth key directory is hosted when RADIUS_SIGNATURE_AGENT is unset. */
+export const DEFAULT_SIGNATURE_AGENT = 'https://radiustech.xyz';
+
+export interface BotAuthConfig {
+  /** Path to the Ed25519 private key (PKCS#8 PEM, or a JWK with `d`). */
+  keyPath: string;
+  /** Origin that serves /.well-known/http-message-signatures-directory for the key. */
+  signatureAgent: string;
+}
+
+/**
+ * Web Bot Auth request signing: on only when RADIUS_SIGNING_KEY names a key file, which the operator
+ * supplies (a key shipped in the CLI would let anyone sign as it). RADIUS_SIGNATURE_AGENT is the
+ * origin hosting its key directory. Separate from the wallet keystore.
+ */
+export function resolveBotAuthConfig(env: NodeJS.ProcessEnv = process.env): BotAuthConfig | undefined {
+  const keyPath = env.RADIUS_SIGNING_KEY?.trim();
+  if (!keyPath) return undefined;
+  const raw = env.RADIUS_SIGNATURE_AGENT?.trim() || DEFAULT_SIGNATURE_AGENT;
+  let agent: URL;
+  try {
+    agent = new URL(raw);
+  } catch {
+    throw new Error(`RADIUS_SIGNATURE_AGENT is not a URL: ${raw}`);
+  }
+  if (agent.protocol !== 'https:' && agent.protocol !== 'http:') {
+    throw new Error(`RADIUS_SIGNATURE_AGENT must be an http(s) origin (got '${raw}')`);
+  }
+  return { keyPath, signatureAgent: agent.origin };
+}
+
 export function configPath(): string {
   return CONFIG_PATH;
 }

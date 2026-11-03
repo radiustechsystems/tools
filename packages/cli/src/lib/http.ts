@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { botAuthFetch } from './botAuth.js';
 
 export const SUPPORTED_VERBS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options'] as const;
 export type HttpVerb = typeof SUPPORTED_VERBS[number];
@@ -63,7 +64,8 @@ export async function runRequest(
   const method = verb.toUpperCase();
   const hasBody = init.body !== undefined && method !== 'GET' && method !== 'HEAD';
 
-  const res = await fetch(url, {
+  // Signed as a Web Bot Auth agent when RADIUS_SIGNING_KEY is set (see botAuth.ts).
+  const res = await botAuthFetch(url, {
     method,
     headers: init.headers,
     // A Blob, not the bytes: fetch cannot replay a Uint8Array body through a 307/308 redirect (detached buffer).

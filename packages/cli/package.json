@@ -51,7 +51,8 @@
     "commander": "^12.1.0",
     "ethers": "^6.13.0",
     "radius-sdk": "workspace:^",
-    "viem": "^2.21.0"
+    "viem": "^2.21.0",
+    "web-bot-auth": "0.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

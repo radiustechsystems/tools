@@ -212,7 +212,7 @@ Errors continue to go to stderr as `error: <message>` with a non-zero exit code;
 In priority order (highest first):
 
 1. **CLI flag** — `--network`, `--rpc-url`, `--private-key`, `--sbc`, `--rusd`, `--json`
-2. **Environment** — `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_FACILITATOR_API_KEY` (`sell check`), `RADIUS_PASSWORD`, `RADIUS_NEW_PASSWORD` (`wallet password`), `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`
+2. **Environment** — `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_FACILITATOR_API_KEY` (`sell check`), `RADIUS_PASSWORD`, `RADIUS_NEW_PASSWORD` (`wallet password`), `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`, `RADIUS_SIGNING_KEY` and `RADIUS_SIGNATURE_AGENT` (opt-in Web Bot Auth request signing, `bot-auth directory`)
 3. **`~/.radius/config.json`** — fields: `network`, `rpcUrl`, `sbcAddress`, `rusdAddress`, `payNetworks` (e.g. `["radius", "base"]`), `rpcUrls` (`{ "base": …, "base-sepolia": … }`)
 4. **Built-in defaults** — mainnet
 

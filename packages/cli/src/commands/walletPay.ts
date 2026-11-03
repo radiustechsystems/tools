@@ -28,6 +28,7 @@ import {
   type HttpResponse,
   type HttpVerb,
 } from '../lib/http.js';
+import { botAuthFetch } from '../lib/botAuth.js';
 import { decidePayment, type PayDecision } from '../lib/payPolicy.js';
 import type { GlobalOptions } from '../types.js';
 
@@ -157,7 +158,7 @@ async function runPay(
       replayed = true;
       return new Response(initial.body as BodyInit, { status: initial.status, headers: initial.headers });
     }
-    return fetch(input, init);
+    return botAuthFetch(input, init);
   };
 
   let offer: PaymentOffer | undefined;

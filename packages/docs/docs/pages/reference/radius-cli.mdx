@@ -92,7 +92,7 @@ Without `RADIUS_NEW_PASSWORD`, `wallet password` prompts for the new password. E
 `radius-cli` resolves configuration in this order:
 
 1. CLI flags: `--network`, `--rpc-url`, `--sbc`, `--rusd`, `--json`, `--private-key`
-2. Environment: `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_PASSWORD`, `RADIUS_NEW_PASSWORD`, `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`
+2. Environment: `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_PASSWORD`, `RADIUS_NEW_PASSWORD`, `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`, `RADIUS_SIGNING_KEY`, `RADIUS_SIGNATURE_AGENT`
 3. Radius config file in the active Radius home
 4. Built-in defaults
 
@@ -283,6 +283,29 @@ radius-cli --json sell check http://localhost:8787/api/lookup --probe-head
 `--probe-head` also sends an unpaid `HEAD` and warns when it is served, because routers answer `HEAD` with the `GET` handler. `--pay --threshold <amount>` then makes one paid request from the local wallet and checks that a receipt comes back. It pays on testnet unless `--network mainnet` is given, whatever `RADIUS_NETWORK` says. The paid request gets a longer timeout than `--timeout`, and if it still fails after the payment was sent, the report says the payment may have settled.
 
 The command prints one line per check (`ok`, `warn`, `FAIL`, `skip`, `info`); with `--json`, stdout is one object with `ok`, `offers`, `mpp`, `facilitators`, `checks` and `summary`. It exits `0` when no check failed, `1` when one did, and `2` on invalid flags (a malformed `-H`, an unreadable `-d @file`, an unknown `--network`, a bad `--price` or `--threshold`).
+
+## Sign requests with Web Bot Auth
+
+`wallet pay` can sign its HTTP requests as a [Web Bot Auth](https://developers.cloudflare.com/bots/reference/bot-verification/web-bot-auth/) agent: RFC 9421 HTTP message signatures with an Ed25519 key, which sites behind Cloudflare and other verifiers can check. Signing is off by default. The CLI ships no signing key, because a shared key would let anyone sign as it; you supply your own, kept apart from the wallet keystore:
+
+- `RADIUS_SIGNING_KEY`: path to an Ed25519 private key, as a PKCS#8 PEM file or a JWK JSON file with `d`
+- `RADIUS_SIGNATURE_AGENT`: origin that hosts the key directory (default `https://radiustech.xyz`)
+
+```bash
+openssl genpkey -algorithm ed25519 -out web-bot-auth.pem
+RADIUS_SIGNING_KEY=./web-bot-auth.pem RADIUS_SIGNATURE_AGENT=https://agent.example.com \
+  radius-cli wallet pay get https://example.com/protected
+```
+
+Each request then carries `Signature-Agent` (the origin, as a quoted string), `Signature-Input` and `Signature`. The signature covers `@authority` and `signature-agent`, uses the key's RFC 7638 JWK thumbprint as `keyid`, carries a random nonce and `tag="web-bot-auth"`, and expires 60 seconds after it is made. Because it covers the host, the CLI follows redirects itself and signs each hop for its own origin.
+
+Print the key directory for the key's public half with `radius-cli bot-auth directory`, and serve it at `<origin>/.well-known/http-message-signatures-directory` as `application/http-message-signatures-directory+json`, with the response signed as Cloudflare's Web Bot Auth documentation describes:
+
+```bash
+RADIUS_SIGNING_KEY=./web-bot-auth.pem radius-cli bot-auth directory > directory.json
+```
+
+The output is a JWKS, `{"keys": [{"kty": "OKP", "crv": "Ed25519", "x": "…", "kid": "…"}]}`, and never includes the private key.
 
 ## When to use other tools
 

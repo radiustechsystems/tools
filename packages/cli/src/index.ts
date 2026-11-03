@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
+import { registerBotAuth } from './commands/botAuth.js';
 import { registerCall } from './commands/call.js';
 import { registerCode } from './commands/code.js';
 import { registerNetwork } from './commands/network.js';
@@ -36,6 +37,7 @@ registerCode(program);
 registerNonce(program);
 registerNetwork(program);
 registerSell(program);
+registerBotAuth(program);
 
 async function main(): Promise<void> {
   await program.parseAsync(process.argv);
