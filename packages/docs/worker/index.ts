@@ -6,7 +6,7 @@
 //   and Analytics Engine. Scripts, styles and images stay asset-first. Agent requests first pass the
 //   Radius Platform policy of RADIUS_PROJECT_ID, which allows, denies, rate-limits or charges them.
 import { Hono } from 'hono';
-import { createHandle, syncPolicy, type RadiusEnv } from '@radiustech/platform-sdk';
+import { createHandle, syncPolicy, syncPricingMd, type RadiusEnv } from '@radiustech/platform-sdk';
 import { radiusPayments, type RadiusPaymentVariables } from 'radius-sdk/hono';
 import { radiusTestnet } from 'radius-sdk';
 import { TRY_ROUTES as ROUTES } from '../docs/components/try/routes';
@@ -97,8 +97,10 @@ function varyOnAccept(res: Response): Response {
 
 // Enforces the project's policy, synced from the platform into RADIUS_POLICY by the cron trigger. It
 // reads the request's `cf.verifiedBotCategory` itself, so the policy decides what verified bots
-// (search engines, link previews, monitors, webhooks, AI crawlers) get.
-const radius = createHandle<Env['Bindings']>();
+// (search engines, link previews, monitors, webhooks, AI crawlers) get. `pricingMd` serves the
+// project's published catalog at `/pricing.md` (an agent request, before the policy: never charged),
+// synced into RADIUS_POLICY by the cron trigger below.
+const radius = createHandle<Env['Bindings']>({ pricingMd: true });
 
 // Serves pages and agent files, records the requests agents make, and gates agents with the policy.
 //
@@ -178,10 +180,14 @@ export default {
     if (new URL(request.url).pathname.startsWith('/api/try/')) return app.fetch(request, env, ctx);
     return serveSite(request, env, ctx);
   },
-  // The cron in wrangler.jsonc: copies the project's policy into RADIUS_POLICY when it changed. Without the
-  // RADIUS_API_KEY secret there is nothing to sync, and agent requests stay ungated.
+  // The cron in wrangler.jsonc: copies the project's policy and its published pricing.md into RADIUS_POLICY
+  // when they changed, each sync failing on its own. Without the RADIUS_API_KEY secret there is nothing to
+  // sync, and agent requests stay ungated.
   scheduled(_controller, env, ctx) {
     if (!env.RADIUS_API_KEY) return;
     ctx.waitUntil(syncPolicy(env).catch((error: unknown) => console.error('radius: policy sync failed:', error)));
+    ctx.waitUntil(
+      syncPricingMd(env).catch((error: unknown) => console.error('radius: pricing.md sync failed:', error)),
+    );
   },
 } satisfies ExportedHandler<Env['Bindings']>;
