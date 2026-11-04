@@ -46,9 +46,13 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RadiusCounter"] }],
   // Syncs the policy every minute, so a change on the platform applies within about two minutes.
   "triggers": { "crons": ["* * * * *"] },
-  // One data point per agent request (worker/index.ts documents the columns). Query it with the
-  // Analytics Engine SQL API (`SELECT ... FROM docs_agent_fetches`) and an Account Analytics: Read token.
-  "analytics_engine_datasets": [{ "binding": "AGENT_FETCHES", "dataset": "docs_agent_fetches" }],
+  // One data point per agent request, and per sampled or agent-like browser page load (worker/index.ts documents
+  // the columns). Query them with the Analytics Engine SQL API (`SELECT ... FROM docs_agent_fetches`,
+  // `docs_browser_signals`) and an Account Analytics: Read token.
+  "analytics_engine_datasets": [
+    { "binding": "AGENT_FETCHES", "dataset": "docs_agent_fetches" },
+    { "binding": "BROWSER_SIGNALS", "dataset": "docs_browser_signals" },
+  ],
   // No "routes": the docs.radiustech.xyz custom domain is attached in the Cloudflare dashboard. `wrangler deploy`
   // calls the custom-domains API only for custom_domain routes listed here, so it leaves that domain alone and
   // the CI token needs no zone or DNS permissions. Don't add the domain back here without granting those.
@@ -75,7 +79,10 @@
     },
     "kv_namespaces": [{ "binding": "RADIUS_POLICY", "id": "9f366bad84104aea97407a8959880653" }],
     "durable_objects": { "bindings": [{ "name": "RADIUS_LIMITER", "class_name": "RadiusCounter" }] },
-    "analytics_engine_datasets": [{ "binding": "AGENT_FETCHES", "dataset": "docs_agent_fetches" }],
+    "analytics_engine_datasets": [
+      { "binding": "AGENT_FETCHES", "dataset": "docs_agent_fetches" },
+      { "binding": "BROWSER_SIGNALS", "dataset": "docs_browser_signals" },
+    ],
     "observability": {
       "logs": {
         "enabled": true,
