@@ -95,12 +95,9 @@ function varyOnAccept(res: Response): Response {
   return varied;
 }
 
-// Verified bots (Cloudflare's `cf.verifiedBotCategory`) that pass the policy untouched: search
-// engines, so the docs stay indexed, and link unfurls, uptime checks and webhooks. AI crawlers,
-// AI search, AI assistants and SEO tools are gated like any other agent.
-const UNGATED_BOTS = new Set(['Search Engine Crawler', 'Page Preview', 'Monitoring & Analytics', 'Webhooks']);
-
-// Enforces the project's policy, synced from the platform into RADIUS_POLICY by the cron trigger.
+// Enforces the project's policy, synced from the platform into RADIUS_POLICY by the cron trigger. It
+// reads the request's `cf.verifiedBotCategory` itself, so the policy decides what verified bots
+// (search engines, link previews, monitors, webhooks, AI crawlers) get.
 const radius = createHandle<Env['Bindings']>();
 
 // Serves pages and agent files, records the requests agents make, and gates agents with the policy.
@@ -119,8 +116,7 @@ async function serveSite(request: Request, env: Env['Bindings'], ctx: ExecutionC
   const isPage = PAGE.test(url.pathname);
   const fromAgent =
     !request.headers.has('sec-fetch-mode') || (isPage && prefersMarkdown(request.headers.get('accept')));
-  const gated = fromAgent && !UNGATED_BOTS.has(String(request.cf?.verifiedBotCategory ?? ''));
-  const res = gated
+  const res = fromAgent
     ? await radius(request, env, (forwarded) => serveStatic(forwarded, env), ctx)
     : await serveStatic(request, env);
   if ((isPage || AGENT_FILE.test(url.pathname)) && fromAgent) record(request, res, env);
