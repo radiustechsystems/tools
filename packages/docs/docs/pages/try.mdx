@@ -29,11 +29,11 @@ The time includes signing, sending, and waiting for the transaction receipt: Rad
 
 ## 3. Pay for an API request
 
-Request a “Hello, world!” message for 0.001 SBC. The greeting is the resource you pay to receive; x402 handles the payment. Test funds go back to the testnet faucet.
+Request a “Hello, world!” message. The greeting is the resource you pay to receive; x402 handles the payment. The API charges under a Radius Platform policy, so the price and the payee come from that policy, and the API quotes them in the `402` response.
 
 1. Click **Request without paying**. The API answers `402 Payment Required` and describes the price in the `PAYMENT-REQUIRED` header.
 2. Click **Pay and request**. The client reads the offer, checks it against your limit, signs a payment authorization, and sends the request again. The API settles the payment and returns `{"message":"Hello, world!"}`.
-3. Lower **Your limit per request** to **0.0001 SBC** and click **Pay and request** again. The price exceeds your limit, so the client refuses before signing a payment.
+3. Lower **Your limit per request** below the price the `402` quoted and click **Pay and request** again. The price exceeds your limit, so the client refuses before signing a payment.
 
 <TryPaidRequest />
 

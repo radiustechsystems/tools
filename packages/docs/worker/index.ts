@@ -1,22 +1,20 @@
 // Worker entry for the docs site. Static assets (dist/public) are served by Workers static assets;
 // only the paths in `assets.run_worker_first` (wrangler.jsonc) reach this code:
-// - /api/try/*: the backend for the interactive "Try Radius" components, a testnet seller and a faucet proxy.
+// - /api/try/*: the backend for the interactive "Try Radius" components, a faucet proxy and a priced
+//   route (/api/try/hello) that the Radius Platform policy of RADIUS_PROJECT_ID charges for.
 // - Pages and agent-facing files (Markdown twins, llms.txt, skills, robots.txt, sitemaps): served from
 //   static assets, with Markdown for requests that prefer it, recording agent requests in Workers Logs
 //   and Analytics Engine. Scripts, styles and images stay asset-first. Agent requests first pass the
 //   Radius Platform policy of RADIUS_PROJECT_ID, which allows, denies, rate-limits or charges them.
 import { Hono } from 'hono';
-import { createHandle, syncPolicy, type RadiusEnv } from '@radiustech/platform-sdk';
-import { radiusPayments, type RadiusPaymentVariables } from 'radius-sdk/hono';
+import { createHandle, radiusPolicy, syncPolicy, type RadiusEnv } from '@radiustech/platform-sdk';
 import { radiusTestnet } from 'radius-sdk';
-import { TRY_ROUTES as ROUTES } from '../docs/components/try/routes';
 
 // Counts the policy's free quotas and rate limits, and claims payments so one isn't used twice.
 export { RadiusCounter } from '@radiustech/platform-sdk/limiters/do';
 
 type Env = {
   Bindings: RadiusEnv & { TRY_PAY_TO: `0x${string}`; ASSETS: Fetcher; AGENT_FETCHES: AnalyticsEngineDataset };
-  Variables: RadiusPaymentVariables;
 };
 
 const FAUCET_URL = radiusTestnet.faucetUrl as string;
@@ -28,7 +26,6 @@ app.get('/api/try/info', (c) =>
     network: radiusTestnet.name,
     caip2: radiusTestnet.network,
     payTo: c.env.TRY_PAY_TO,
-    routes: Object.entries(ROUTES).map(([route, spec]) => ({ route, ...spec })),
   }),
 );
 
@@ -48,14 +45,11 @@ app.on(['GET', 'POST'], '/api/try/faucet/*', async (c) => {
   });
 });
 
-app.use(
-  '/api/try/*',
-  radiusPayments<Env>({
-    network: 'testnet',
-    payTo: (c) => c.env.TRY_PAY_TO,
-    routes: ROUTES,
-  }),
-);
+// The price, network and payee of /api/try/hello come from the project's policy on the Radius Platform
+// (synced into RADIUS_POLICY, like the rest of the site's gating), not from this Worker. Unlike the page
+// gate, this route is charged for every caller, browsers included, because the /try page calls it from
+// one. The route was always paid, so until a policy has loaded it answers 503 instead of serving free.
+app.use('/api/try/hello', radiusPolicy<Env['Bindings']>({ noPolicy: 'deny' }));
 
 app.get('/api/try/hello', (c) => c.json({ message: 'Hello, world!' }));
 
