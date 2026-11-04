@@ -26,8 +26,9 @@
   // Worker that implements a Durable Object, so PR previews are Worker Previews: see "previews" below.
   "workers_dev": true,
   "preview_urls": true,
-  // Recipient of the testnet payments made from the interactive "Try Radius" components: the testnet
-  // faucet's payout wallet, so test SBC goes back to the faucet. Testnet only; no private key on the server.
+  // TRY_PAY_TO: the default recipient of the "Send SBC" step of the interactive "Try Radius" components
+  // (served by /api/try/info): the testnet faucet's payout wallet, so test SBC goes back to the faucet. It
+  // doesn't set who is paid for /api/try/hello: that payee is in the project's policy.
   // RADIUS_PROJECT_ID: the Radius Platform project ("docs.radiustech.xyz") whose policy gates agent requests
   // (worker/index.ts). The RADIUS_API_KEY secret, an organization key with endpoints:read, lets the cron sync it:
   // set it with `wrangler secret put RADIUS_API_KEY`. Without it, nothing is gated.
