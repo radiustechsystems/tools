@@ -90,7 +90,7 @@ try {
 }
 ```
 
-For `payment_rejected`, `error.details.response` holds the server's response. See the [reference](/reference/radius-sdk#errors) for every code.
+For `payment_rejected`, `error.details.response` holds the server's response. When that `402` reports a pending settlement instead of a rejection, `error.details.pending` holds the payment to [resume](#when-the-outcome-is-uncertain). See the [reference](/reference/radius-sdk#errors) for every code.
 
 ## Confirm the payment
 
@@ -109,13 +109,27 @@ If a paid request fails or times out, check the chain before paying again. `payF
 
 ### When the outcome is uncertain
 
-A timeout or HTTP `502` can mean the payment settled but its response was lost. Checking status, recovering delivery, and signing a new payment are different actions:
+A timeout, a `502`, or a `503` with `error: 'settlement_pending'` can mean the payment settled, or will, but its response was lost or is not ready. Calling `payFetch` again signs a **new** payment, which can charge twice. Present the same signed payment again instead: `payFetch.pay` returns the outcome as a value, and `payFetch.resume` retries the original payment with backoff:
 
-- **Status unknown:** keep the request details and any transaction hash, and check it with `getSettlement`. `undefined` is not proof that the payment failed. Without a transaction hash, ask the seller or facilitator operator to check the attempt.
-- **Paid, but the resource did not arrive:** ask the seller to deliver the same purchase. Do not authorize another payment for it.
-- **Rejected or reverted:** check for earlier attempts that may still be pending, fix the cause, and only then pay again.
+```typescript
+const outcome = await payFetch.pay('https://{{SELLER_HOST}}/api/lookup');
 
-Calling `payFetch` again signs a new payment, so do not retry a paid request automatically after an uncertain result. For the full policy, including when a retry or another facilitator is safe, see [recover from failed or uncertain payments](/build/x402#recover-from-failed-or-uncertain-payments).
+if (outcome.status === 'pending' || outcome.status === 'unknown') {
+  const final = await payFetch.resume(outcome.pending, { maxAttempts: 5, signal: AbortSignal.timeout(60_000) });
+  console.log(final.status);
+}
+```
+
+`outcome.status` is one of these:
+
+- **`settled`:** the payment went through. If `delivered` is `false`, ask the seller to deliver the same purchase; do not pay again.
+- **`pending` or `unknown`:** retryable. Resume with `outcome.pending`, now or later. It never signs a new payment.
+- **`rejected`:** refused before anything moved. Fix the cause, then pay again.
+- **`failed`:** the settlement transaction reverted, or the authorization expired unused. Paying again is safe.
+
+Aborting `resume` stops waiting, not the payment: the signed payment can still settle until it expires, and `resume` returns the record to try again. When the seller refuses the payment on a retry, `resume` checks the chain: an authorization already used means the payment settled, and one that expired unused means it failed.
+
+`outcome.pending` contains the signed payment, which anyone can settle until it expires. Keep it like a secret, never log it, and delete it once the outcome is final. If you call the plain `payFetch`, pass `onPaymentPending` to `createRadiusFetch` to receive the same record. For the full policy, including when another facilitator is safe, see [recover from failed or uncertain payments](/build/x402#recover-from-failed-or-uncertain-payments).
 
 ## Permit2 approval
 

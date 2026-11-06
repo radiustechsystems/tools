@@ -161,6 +161,13 @@ What you get, on the wire, with no Radius-specific client knowledge required:
   delivery: in the default flow it fires before the handler, and errors it throws are logged, not
   surfaced. Keep the receipt and the delivery outcome separately, and reconcile a paid 5xx (or an
   uncertain 502) against the transaction before the buyer pays again.
+- Pending and unknown settlement are not rejections. A facilitator answer of
+  `errorReason: 'settlement_pending'` gets `503` with `Retry-After` and the facilitator's
+  `PAYMENT-RESPONSE` (the broadcast transaction), in both settle modes; a settle call with no
+  facilitator answer gets `502` with `settlement: 'unknown'`. Only rejections and failures are
+  `402`. `onSettlement(outcome, context)` reports every attempt (`settled`, `pending`, `unknown`,
+  `rejected`, `failed`) with the signed payment; `classifySettlement` replaces the rule that
+  recognises a pending answer.
 - `eip2612GasSponsoring` is declared only when the facilitator's `/supported` lists it
   (`gasSponsoring: true | false` overrides), so clients never send a permit nobody will honour.
 - No I/O at module scope (Workers-safe): the SDK's handlers fetch the facilitator's `/supported`
@@ -270,6 +277,14 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   `payFetch.reconcilePayment(receipt, offer)` (or `reconcilePayment` from `radius-sdk/client`)
   checks the token, payer, recipient and amount on chain and returns `confirmed`, `no_charge`,
   `mismatch`, `reverted`, or `unresolved` when the evidence is not available yet.
+- Pending and unknown outcomes: `payFetch.pay(url)` resolves with a typed outcome (`settled`,
+  `pending`, `unknown`, `rejected`, `failed`, or `not_required`) instead of throwing once a payment
+  was signed. A `pending` or `unknown` one carries `outcome.pending`, and
+  `payFetch.resume(outcome.pending, { maxAttempts, signal })` presents the **same** signed payment
+  again with backoff until it settles (delivering the original purchase), fails or is rejected. It
+  never signs a new payment; aborting stops the wait, not the payment. Plain `payFetch` keeps its
+  behaviour; `onPaymentPending` hands its callers the same record. The record holds a signed
+  authorization that anyone can settle until it expires: keep it like a secret and never log it.
 - Redirects: `fetch` follows them before the 402 (its limit of 20) and the request is paid at the final URL
   (`response.url`), with the price cap and `onPaymentRequired` applied to that offer. For GET and HEAD that
   is all there is to it. POST and other methods are where x402 clients diverge (`@x402/fetch` and
