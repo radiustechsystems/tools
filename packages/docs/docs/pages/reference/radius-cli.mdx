@@ -275,12 +275,84 @@ Use `radius-cli sell check <url>` on your own paid route, locally or deployed, t
 - the challenge's `resource.url` is the requested URL
 - the facilitator's `/supported` lists each offer's scheme, network and transfer method: the network's default facilitator, or the ones given with `--facilitator <url>` (`RADIUS_FACILITATOR_API_KEY` is sent as `x-api-key`)
 - a `radius-sdk` buyer would select the offer, and each MPP challenge mirrors an x402 offer
+- a request with a malformed payment credential (`PAYMENT-SIGNATURE`, or `X-PAYMENT` for an x402 v1 challenge, and `Authorization: Payment` when the route offers MPP) gets a `402`, not a `5xx` or the paid content
+- the seller's OpenAPI document, when it publishes one, lists the route as paid (`x-radius-price` matching the `402`, or a documented `402` response)
 
 ```bash
 radius-cli sell check http://localhost:8787/api/lookup --price '$0.001'
 radius-cli sell check https://api.example.com/query -X post -d '{"q":1}' --facilitator https://facilitator.example
 radius-cli --json sell check http://localhost:8787/api/lookup --probe-head
 ```
+
+### Malformed credentials
+
+A buyer whose payment header is corrupted, truncated or signed for another challenge must get a fresh `402`, so it can sign again. `sell check` sends one unpaid request per protocol with a credential nothing can verify, and checks the answer. A `402` passes. A `5xx` fails, because a bad header crashes the seller. A `2xx` fails as blocking, because the route is served without a valid payment. Any other status is a warning. `radius-sdk` sellers answer `402` with a fresh challenge. The check never pays.
+
+### OpenAPI discovery
+
+The Radius Platform can propose a project's endpoints from your OpenAPI document, one per operation. It reads two operation extensions: `x-radius-price`, the price per call in USD as a decimal string such as `"0.001"`, and `x-radius-free`, which marks the operation free. An operation with neither is paid at the project's default price when it documents a `402` response, and free otherwise.
+
+```json
+{
+  "paths": {
+    "/api/lookup": {
+      "get": {
+        "x-radius-price": "0.001",
+        "responses": {
+          "200": { "description": "The lookup result" },
+          "402": { "description": "Payment required" }
+        }
+      }
+    }
+  }
+}
+```
+
+`sell check` reads `/openapi.json` on the route's origin, or the URL or file given with `--openapi <url|file>`, and checks that:
+
+- the document lists the route and method (paths are matched after any `servers` prefix, and `{param}` templates match one path segment)
+- the operation has an `x-radius-price` equal to the `402` offer's price (the offer's atomic amount converted with the asset's decimals, as for `--price`), or documents a `402` response
+- the operation is not marked `x-radius-free`, since the route answers `402`
+
+Some x402 discovery tools read an `x-payment-info` object instead. It has no ratified schema and the Radius Platform does not read it, so `sell check` never requires it: when an operation has one, its `protocols` and its price (a `$`-prefixed USD string, `{ "amount": "0.001", "currency": "USD" }`, or an atomic amount with the asset address as `currency`) must agree with the `402`.
+
+These checks warn and never fail. A missing `/openapi.json` is reported as `info`. `--no-openapi` skips the check.
+
+### Score and CI
+
+Every run ends with a score from 0 to 100. A seller starts at 100 and loses points for each check that did not pass:
+
+| Result                                                                                                                             | Points |
+| ---------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| Blocking failure: buyers cannot pay (status, challenge, offers, resource, facilitator, buyer), or a malformed credential is served | -40    |
+| Other failure, such as a malformed credential answered with a `5xx`                                                                | -15    |
+| Warning                                                                                                                            | -5     |
+| Pass, info or skip                                                                                                                 | 0      |
+
+A route that does not answer `402` scores 0. A run that never reached the `402`, such as a free quota that was not used up, scores at most 50. With `--pricing`, the score is the lowest route score. The text output shows the points each check cost next to it, and the score on the last line.
+
+`--min-score <n>` lets a run pass with failures that do not stop buyers from paying. It exits `1` when the score is below `n`, or when any blocking failure occurred, whatever the score: buyers cannot pay, or the route is served without payment. Otherwise it exits `0`. Without `--min-score`, the exit code is unchanged: `1` when any check failed.
+
+`sell check` always prints plain text without color, so its output is stable in a CI log. There is no CI flag; the command reads the environment instead:
+
+- When `CI` or `GITHUB_ACTIONS` is set to anything but an empty string, `0` or `false`, `--pay` is refused with exit code `2`, so a CI run never pays and never prompts for a keystore password. Make the testnet payment from a terminal.
+- When `GITHUB_ACTIONS` is `true`, it also prints an `::error` annotation for each failed check and a `::warning` annotation for each warning, and appends a table of the checks to the job summary (`GITHUB_STEP_SUMMARY`). With `--json`, the annotations go to stderr so stdout stays JSON.
+
+Run it as a step in a GitHub Actions workflow:
+
+```yaml
+jobs:
+  sell-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check the paid endpoint
+        run: npx radius-cli sell check https://staging.example.com/api/lookup --min-score 80
+```
+
+The score, `--min-score`, the GitHub Actions output, the `--pay` refusal in CI, and the malformed credential and OpenAPI checks need `radius-cli` 0.8.0 or later.
 
 ### Free quotas
 
@@ -299,7 +371,7 @@ Each listed method of each route is checked (`ANY` with `GET`), in file order. T
 
 `--probe-head` also sends an unpaid `HEAD` and warns when it is served, because routers answer `HEAD` with the `GET` handler. `--pay --threshold <amount>` then makes one paid request from the local wallet and checks that a receipt comes back. It pays on testnet unless `--network mainnet` is given, whatever `RADIUS_NETWORK` says. Under an agent, pass the keystore password with `--password-file` or `RADIUS_PASSWORD`; without one and without a terminal, `--pay` exits `2` before any request. The paid request gets a longer timeout than `--timeout`, and if it still fails after the payment was sent, the report says the payment may have settled.
 
-The command prints one line per check (`ok`, `warn`, `FAIL`, `skip`, `info`); with `--json`, stdout is one object with `ok`, `offers`, `mpp`, `facilitators`, `freeQuota` (when there is one), `checks` and `summary`, or, with `--pricing`, `source`, `ok`, `routes` and `summary`. It exits `0` when no check failed, `1` when one did, and `2` on invalid flags (a malformed `-H`, an unreadable `-d @file`, an unknown `--network`, a bad `--price` or `--threshold`).
+The command prints one line per check (`ok`, `warn`, `FAIL`, `skip`, `info`, and the points it cost) and the score; with `--json`, stdout is one object with `ok`, `score`, `offers`, `mpp`, `facilitators`, `freeQuota` (when there is one), `checks` (each with `id`, `status`, `message`, and `deduction` when it cost points) and `summary`, or, with `--pricing`, `source`, `ok`, `score`, `routes` and `summary`. It exits `0` when no check failed, `1` when one did (or, with `--min-score`, when the score is below it or a blocking check failed), and `2` on invalid flags (a malformed `-H`, an unreadable `-d @file`, an unknown `--network`, a bad `--price`, `--threshold` or `--min-score`, an unreadable `--openapi` file, or `--pay` in CI).
 
 ## When to use other tools
 

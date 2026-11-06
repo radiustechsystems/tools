@@ -88,6 +88,9 @@ describe('sell check --pay without a terminal', () => {
 
   it('exits 2 before any request when the keystore would need a prompt', async () => {
     Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    // In CI, sell check refuses --pay before it looks at the keystore.
+    vi.stubEnv('CI', undefined);
+    vi.stubEnv('GITHUB_ACTIONS', undefined);
     const fetch = vi.fn(() => { throw new Error('no request expected'); });
     vi.stubGlobal('fetch', fetch);
     const { registerSell } = await import('../src/commands/sell.js');

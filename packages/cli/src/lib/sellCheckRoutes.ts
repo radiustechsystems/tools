@@ -25,6 +25,8 @@ export interface RoutesReport {
   /** True when at least one route was checked and none failed. */
   ok: boolean;
   routes: RouteResult[];
+  /** The lowest score of the checked routes (a pass needs every route to pass); 0 when none was checked. */
+  score: number;
   summary: { routes: { checked: number; passed: number; failed: number; skipped: number }; checks: Record<CheckStatus, number> };
 }
 
@@ -70,6 +72,7 @@ export async function checkRoutes(
     source,
     ok: checked.length > 0 && failed === 0,
     routes: results,
+    score: checked.length === 0 ? 0 : Math.min(...checked.map((r) => r.report!.score)),
     summary: { routes: { checked: checked.length, passed: checked.length - failed, failed, skipped: results.length - checked.length }, checks },
   };
 }
