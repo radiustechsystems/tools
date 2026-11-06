@@ -30,9 +30,9 @@ Returns the facilitator's supported networks, schemes, and signer addresses.
 | `kinds[].scheme`                    | `string` | Payment scheme (for example, `exact`)                                                            |
 | `kinds[].network`                   | `string` | CAIP-2 network identifier                                                                        |
 | `kinds[].extra`                     | `object` | Scheme-specific metadata                                                                         |
-| `kinds[].extra.assetTransferMethod` | `string` | Transfer method: `permit2` (Radius) or `erc2612` (Stablecoin.xyz)                                |
-| `kinds[].extra.name`                | `string` | ERC-2612 permit domain name                                                                      |
-| `kinds[].extra.version`             | `string` | ERC-2612 permit domain version                                                                   |
+| `kinds[].extra.assetTransferMethod` | `string` | Transfer method: `eip3009` or `permit2` (Radius) or `erc2612` (Stablecoin.xyz)                   |
+| `kinds[].extra.name`                | `string` | Token EIP-712 domain name                                                                        |
+| `kinds[].extra.version`             | `string` | Token EIP-712 domain version                                                                     |
 | `extensions`                        | `array`  | Supported protocol extensions (for example, `eip2612GasSponsoring` for gasless Permit2 approval) |
 | `signers`                           | `object` | Map of CAIP-2 patterns to signer addresses                                                       |
 
@@ -41,6 +41,16 @@ Returns the facilitator's supported networks, schemes, and signer addresses.
 ```json
 {
   "kinds": [
+    {
+      "x402Version": 2,
+      "scheme": "exact",
+      "network": "eip155:723487",
+      "extra": {
+        "assetTransferMethod": "eip3009",
+        "name": "Stable Coin",
+        "version": "1"
+      }
+    },
     {
       "x402Version": 2,
       "scheme": "exact",
@@ -59,7 +69,7 @@ Returns the facilitator's supported networks, schemes, and signer addresses.
 
 The Radius testnet facilitator (`https://facilitator.testnet.radiustech.xyz/supported`) returns an equivalent response with `"network": "eip155:72344"`.
 
-`assetTransferMethod` is `"permit2"` for the Radius facilitator or `"erc2612"` for Stablecoin.xyz. The `"eip2612GasSponsoring"` extension means the facilitator handles the one-time Permit2 approval gaslessly if the payer hasn't already approved the Permit2 contract.
+The Radius facilitator lists `"eip3009"` before `"permit2"`. A seller offers the first method listed, so `radius-sdk` sellers on Radius offer EIP-3009, which needs no approval. `"permit2"` serves the `upto` scheme and sellers that choose Permit2. Stablecoin.xyz lists `"erc2612"`. The `"eip2612GasSponsoring"` extension means the facilitator handles the one-time Permit2 approval gaslessly if the payer hasn't already approved the Permit2 contract; it applies only to Permit2 payments.
 
 **Example request:**
 
@@ -77,40 +87,40 @@ Verifies a payment signature without settling on-chain. Use this endpoint to val
 
 The server passes the decoded `PAYMENT-SIGNATURE` value directly as `paymentPayload` and adds a `paymentRequirements` object built from its own config:
 
-| Field                                              | Type     | Description                                                                                                 |
-| -------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------- |
-| `x402Version`                                      | `number` | Protocol version (`2`)                                                                                      |
-| `paymentPayload`                                   | `object` | The decoded client payload from the `PAYMENT-SIGNATURE` header                                              |
-| `paymentPayload.x402Version`                       | `number` | Protocol version (`2`)                                                                                      |
-| `paymentPayload.resource`                          | `object` | (Optional) Resource info echoed from the 402 response                                                       |
-| `paymentPayload.accepted`                          | `object` | The payment method the client selected                                                                      |
-| `paymentPayload.accepted.scheme`                   | `string` | Payment scheme (for example, `exact`)                                                                       |
-| `paymentPayload.accepted.network`                  | `string` | CAIP-2 network identifier                                                                                   |
-| `paymentPayload.accepted.amount`                   | `string` | Payment amount in raw token units                                                                           |
-| `paymentPayload.accepted.asset`                    | `string` | ERC-20 token contract address                                                                               |
-| `paymentPayload.accepted.payTo`                    | `string` | Recipient address                                                                                           |
-| `paymentPayload.accepted.maxTimeoutSeconds`        | `number` | Maximum time the payment is valid                                                                           |
-| `paymentPayload.accepted.extra`                    | `object` | Scheme-specific metadata                                                                                    |
-| `paymentPayload.payload`                           | `object` | Signed authorization data                                                                                   |
-| `paymentPayload.payload.signature`                 | `string` | Single 65-byte hex-encoded signature                                                                        |
-| `paymentPayload.payload.authorization`             | `object` | EIP-2612 permit fields                                                                                      |
-| `paymentPayload.payload.authorization.from`        | `string` | Payer address                                                                                               |
-| `paymentPayload.payload.authorization.to`          | `string` | Spender address (for EIP-2612 flows: the settlement wallet; for Permit2 flows: the `x402ExactPermit2Proxy`) |
-| `paymentPayload.payload.authorization.value`       | `string` | Payment amount in raw token units                                                                           |
-| `paymentPayload.payload.authorization.validAfter`  | `string` | Earliest valid timestamp                                                                                    |
-| `paymentPayload.payload.authorization.validBefore` | `string` | Latest valid timestamp                                                                                      |
-| `paymentPayload.payload.authorization.nonce`       | `string` | Unique nonce for replay protection                                                                          |
-| `paymentPayload.extensions`                        | `object` | (Optional) Protocol extensions data                                                                         |
-| `paymentRequirements`                              | `object` | Expected payment parameters from the server config                                                          |
-| `paymentRequirements.scheme`                       | `string` | Payment scheme (for example, `exact`)                                                                       |
-| `paymentRequirements.network`                      | `string` | CAIP-2 network identifier                                                                                   |
-| `paymentRequirements.amount`                       | `string` | Required amount in raw token units                                                                          |
-| `paymentRequirements.asset`                        | `string` | ERC-20 token contract address                                                                               |
-| `paymentRequirements.payTo`                        | `string` | Expected recipient address                                                                                  |
-| `paymentRequirements.maxTimeoutSeconds`            | `number` | Maximum time the payment is valid                                                                           |
-| `paymentRequirements.extra`                        | `object` | Token permit domain metadata                                                                                |
+| Field                                              | Type     | Description                                                                           |
+| -------------------------------------------------- | -------- | ------------------------------------------------------------------------------------- |
+| `x402Version`                                      | `number` | Protocol version (`2`)                                                                |
+| `paymentPayload`                                   | `object` | The decoded client payload from the `PAYMENT-SIGNATURE` header                        |
+| `paymentPayload.x402Version`                       | `number` | Protocol version (`2`)                                                                |
+| `paymentPayload.resource`                          | `object` | (Optional) Resource info echoed from the 402 response                                 |
+| `paymentPayload.accepted`                          | `object` | The payment method the client selected                                                |
+| `paymentPayload.accepted.scheme`                   | `string` | Payment scheme (for example, `exact`)                                                 |
+| `paymentPayload.accepted.network`                  | `string` | CAIP-2 network identifier                                                             |
+| `paymentPayload.accepted.amount`                   | `string` | Payment amount in raw token units                                                     |
+| `paymentPayload.accepted.asset`                    | `string` | ERC-20 token contract address                                                         |
+| `paymentPayload.accepted.payTo`                    | `string` | Recipient address                                                                     |
+| `paymentPayload.accepted.maxTimeoutSeconds`        | `number` | Maximum time the payment is valid                                                     |
+| `paymentPayload.accepted.extra`                    | `object` | Scheme-specific metadata                                                              |
+| `paymentPayload.payload`                           | `object` | Signed authorization data                                                             |
+| `paymentPayload.payload.signature`                 | `string` | Single 65-byte hex-encoded signature                                                  |
+| `paymentPayload.payload.authorization`             | `object` | EIP-3009 authorization fields; Stablecoin.xyz's `erc2612` uses the same fields        |
+| `paymentPayload.payload.authorization.from`        | `string` | Payer address                                                                         |
+| `paymentPayload.payload.authorization.to`          | `string` | Recipient: `payTo` for EIP-3009; the settlement wallet for Stablecoin.xyz's `erc2612` |
+| `paymentPayload.payload.authorization.value`       | `string` | Payment amount in raw token units                                                     |
+| `paymentPayload.payload.authorization.validAfter`  | `string` | Earliest valid timestamp                                                              |
+| `paymentPayload.payload.authorization.validBefore` | `string` | Latest valid timestamp                                                                |
+| `paymentPayload.payload.authorization.nonce`       | `string` | Unique nonce for replay protection                                                    |
+| `paymentPayload.extensions`                        | `object` | (Optional) Protocol extensions data                                                   |
+| `paymentRequirements`                              | `object` | Expected payment parameters from the server config                                    |
+| `paymentRequirements.scheme`                       | `string` | Payment scheme (for example, `exact`)                                                 |
+| `paymentRequirements.network`                      | `string` | CAIP-2 network identifier                                                             |
+| `paymentRequirements.amount`                       | `string` | Required amount in raw token units                                                    |
+| `paymentRequirements.asset`                        | `string` | ERC-20 token contract address                                                         |
+| `paymentRequirements.payTo`                        | `string` | Expected recipient address                                                            |
+| `paymentRequirements.maxTimeoutSeconds`            | `number` | Maximum time the payment is valid                                                     |
+| `paymentRequirements.extra`                        | `object` | Transfer method and token EIP-712 domain                                              |
 
-When using a Permit2-based facilitator, the payment payload uses `permit2Authorization` instead of `authorization`, with different fields (`permitted`, `spender`, `witness`). The `/verify` and `/settle` request format is the same — the facilitator interprets the payload based on the `assetTransferMethod`. See the [x402 exact EVM scheme spec](https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md) for the Permit2 payload structure.
+A Permit2 payment payload uses `permit2Authorization` instead of `authorization`, with different fields (`permitted`, `spender`, `witness`). The `/verify` and `/settle` request format is the same — the facilitator interprets the payload based on the `assetTransferMethod`. See the [x402 exact EVM scheme spec](https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md) for the Permit2 payload structure.
 
 **Response body:**
 
@@ -122,9 +132,9 @@ When using a Permit2-based facilitator, the payment payload uses `permit2Authori
 | `invalidMessage` | `string`  | (Optional) Human-readable failure message                              |
 | `extensions`     | `object`  | (Optional) Protocol extensions data                                    |
 
-**Example request (EIP-2612 payload format):**
+**Example request (EIP-3009 payload format):**
 
-The example below uses the EIP-2612 `authorization` format. For the Permit2 `permit2Authorization` format used with the Radius facilitator, see the [x402 exact EVM scheme spec](https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md).
+The example below uses the EIP-3009 `authorization` format, the default with the Radius facilitator. For the Permit2 `permit2Authorization` format, see the [x402 exact EVM scheme spec](https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md).
 
 ```bash
 curl -X POST https://facilitator.radiustech.xyz/verify \
@@ -141,7 +151,7 @@ curl -X POST https://facilitator.radiustech.xyz/verify \
         "payTo": "{{MERCHANT_ADDRESS}}",
         "maxTimeoutSeconds": 300,
         "extra": {
-          "assetTransferMethod": "erc2612",
+          "assetTransferMethod": "eip3009",
           "name": "Stable Coin",
           "version": "1"
         }
@@ -153,7 +163,7 @@ curl -X POST https://facilitator.radiustech.xyz/verify \
           "to": "{{MERCHANT_ADDRESS}}",
           "value": "100",
           "validAfter": "0",
-          "validBefore": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+          "validBefore": "{{VALID_BEFORE}}",
           "nonce": "{{NONCE}}"
         }
       }
@@ -165,7 +175,7 @@ curl -X POST https://facilitator.radiustech.xyz/verify \
       "asset": "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb",
       "payTo": "{{MERCHANT_ADDRESS}}",
       "maxTimeoutSeconds": 300,
-      "extra": { "name": "Stable Coin", "version": "1" }
+      "extra": { "assetTransferMethod": "eip3009", "name": "Stable Coin", "version": "1" }
     }
   }'
 ```
@@ -186,9 +196,9 @@ curl -X POST https://facilitator.radiustech.xyz/verify \
 
 ### `POST /settle`
 
-Settles a verified payment on-chain. The request body matches the `/verify` endpoint. On success, the facilitator submits the permit and transfer transactions to Radius and returns the transaction hash.
+Settles a verified payment on-chain. The request body matches the `/verify` endpoint. On success, the facilitator submits the transfer to Radius and returns the transaction hash.
 
-**Request body:** Same as [`POST /verify`](#post-verify). For EIP-2612 flows, the facilitator splits the signature into `v`, `r`, `s` internally when calling the on-chain `permit()` function. For Permit2 flows, the facilitator forwards the signature to the `x402ExactPermit2Proxy` contract.
+**Request body:** Same as [`POST /verify`](#post-verify). For EIP-3009 flows, the facilitator calls the token's `transferWithAuthorization` with the signed authorization. For Stablecoin.xyz's `erc2612` flows, the facilitator splits the signature into `v`, `r`, `s` internally when calling the on-chain `permit()` function. For Permit2 flows, the facilitator forwards the signature to the `x402ExactPermit2Proxy` contract.
 
 **Response body:**
 
@@ -202,7 +212,7 @@ Settles a verified payment on-chain. The request body matches the `/verify` endp
 | `errorMessage` | `string`  | (Optional) Human-readable failure message                              |
 | `extensions`   | `object`  | (Optional) Protocol extensions data                                    |
 
-**Example request (EIP-2612 payload format):**
+**Example request (EIP-3009 payload format):**
 
 ```bash
 curl -X POST https://facilitator.radiustech.xyz/settle \
@@ -219,7 +229,7 @@ curl -X POST https://facilitator.radiustech.xyz/settle \
         "payTo": "{{MERCHANT_ADDRESS}}",
         "maxTimeoutSeconds": 300,
         "extra": {
-          "assetTransferMethod": "erc2612",
+          "assetTransferMethod": "eip3009",
           "name": "Stable Coin",
           "version": "1"
         }
@@ -231,7 +241,7 @@ curl -X POST https://facilitator.radiustech.xyz/settle \
           "to": "{{MERCHANT_ADDRESS}}",
           "value": "100",
           "validAfter": "0",
-          "validBefore": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+          "validBefore": "{{VALID_BEFORE}}",
           "nonce": "{{NONCE}}"
         }
       }
@@ -243,7 +253,7 @@ curl -X POST https://facilitator.radiustech.xyz/settle \
       "asset": "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb",
       "payTo": "{{MERCHANT_ADDRESS}}",
       "maxTimeoutSeconds": 300,
-      "extra": { "name": "Stable Coin", "version": "1" }
+      "extra": { "assetTransferMethod": "eip3009", "name": "Stable Coin", "version": "1" }
     }
   }'
 ```
@@ -306,9 +316,9 @@ interface X402Config {
   amount: string;
   /** Optional API key for the facilitator */
   facilitatorApiKey?: string;
-  /** ERC-2612 permit domain name (default: "Stable Coin") */
+  /** Token EIP-712 domain name (default: "Stable Coin") */
   tokenName?: string;
-  /** ERC-2612 permit domain version (default: "1") */
+  /** Token EIP-712 domain version (default: "1") */
   tokenVersion?: string;
   /** HTTP header carrying the payment (default: "PAYMENT-SIGNATURE") */
   paymentHeader?: string;
@@ -405,11 +415,11 @@ A `502` means the facilitator failed or could not be reached. It does not mean t
 
 ## Facilitators supporting Radius
 
-| Facilitator              | URL                                                                                                 | Radius networks   | Notes                                                                                                             |
-| ------------------------ | --------------------------------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Radius** (recommended) | Mainnet: `https://facilitator.radiustech.xyz` Testnet: `https://facilitator.testnet.radiustech.xyz` | Mainnet + Testnet | First-party, Permit2 + gas sponsoring, v2                                                                         |
-| Stablecoin.xyz           | `https://x402.stablecoin.xyz`                                                                       | Mainnet + Testnet | SBC via `erc2612`, v1 and v2; not payable by `radius-sdk` or `radius-cli`, so not a failover for Permit2 payments |
-| Middlebit                | `https://middlebit.com`                                                                             | Mainnet           | Middleware layer, uses Stablecoin.xyz for settlement                                                              |
+| Facilitator              | URL                                                                                                 | Radius networks   | Notes                                                                                                           |
+| ------------------------ | --------------------------------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Radius** (recommended) | Mainnet: `https://facilitator.radiustech.xyz` Testnet: `https://facilitator.testnet.radiustech.xyz` | Mainnet + Testnet | First-party, EIP-3009 (default) and Permit2 with gas sponsoring, v2                                             |
+| Stablecoin.xyz           | `https://x402.stablecoin.xyz`                                                                       | Mainnet + Testnet | SBC via `erc2612`, v1 and v2; not payable by `radius-sdk` or `radius-cli`, so not a failover for their payments |
+| Middlebit                | `https://middlebit.com`                                                                             | Mainnet           | Middleware layer, uses Stablecoin.xyz for settlement                                                            |
 
 ## Network reference
 

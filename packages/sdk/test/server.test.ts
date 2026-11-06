@@ -68,7 +68,7 @@ describe('radiusPayments (web-standard handler): 402 challenge', () => {
     expect(pay.requiresPayment(new Request('http://seller.test/api/lookup', { method: 'POST' }))).toBe(false);
   });
 
-  it('returns a standard x402 v2 challenge for SBC via EIP-3009 (listed first by the facilitator) with gas sponsoring declared', async () => {
+  it('returns a standard x402 v2 challenge for SBC via EIP-3009 (listed first by the facilitator), with no gas-sponsoring declaration', async () => {
     const res = await makeHandler()(new Request('http://seller.test/api/lookup?q=1'), () => Response.json({ leaked: true }));
     expect(res.status).toBe(402);
     expect(res.headers.get('content-type')).toContain('application/json');
@@ -85,7 +85,8 @@ describe('radiusPayments (web-standard handler): 402 challenge', () => {
       maxTimeoutSeconds: 300,
       extra: { assetTransferMethod: 'eip3009', name: 'Stable Coin', version: '1', paymentFlow: 'upfront' },
     });
-    expect(pr.extensions).toHaveProperty('eip2612GasSponsoring');
+    // EIP-3009 needs no approval, so there is nothing for the facilitator to sponsor.
+    expect(pr.extensions).toBeUndefined();
     expect(await res.text()).not.toContain('leaked');
   });
 
@@ -300,7 +301,7 @@ describe('createRadiusServer', () => {
       expect(challenge.status).toBe(402);
       const pr = decodePaymentRequiredHeader(challenge.headers.get('payment-required')!);
       expect(pr.accepts[0]).toMatchObject({ scheme: 'exact', network: 'eip155:72344', amount: '1000', payTo: PAY_TO, extra: { assetTransferMethod: 'eip3009', paymentFlow: 'upfront' } });
-      expect(pr.extensions).toHaveProperty('eip2612GasSponsoring');
+      expect(pr.extensions).toBeUndefined();
 
       const realFetch = globalThis.fetch;
       vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

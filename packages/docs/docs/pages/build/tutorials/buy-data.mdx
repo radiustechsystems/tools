@@ -120,7 +120,7 @@ settlement success 1000n
 after: buyer 0.499 SBC; seller 0.001 SBC
 ```
 
-`payFetch` received the `402`, checked the offer against `maxPerRequest`, signed a payment, and retried. The receipt comes from the seller; `getSettlement` reads the same transaction from the chain, and `paid(seller)` shows the seller received 1000 base units. Use `paid(to)` rather than reading `transfers` directly: a settlement transaction can also contain the facilitator's own fee conversion. The buyer paid exactly the price: the facilitator sponsored the one-time Permit2 approval, so no gas was spent.
+`payFetch` received the `402`, checked the offer against `maxPerRequest`, signed a payment, and retried. The receipt comes from the seller; `getSettlement` reads the same transaction from the chain, and `paid(seller)` shows the seller received 1000 base units. Use `paid(to)` rather than reading `transfers` directly: a settlement transaction can also contain the facilitator's own fee conversion. The buyer paid exactly the price: the offer used EIP-3009, so the buyer signed one authorization, needed no approval, and spent no gas.
 
 ## 4. Refuse an offer above the limit
 

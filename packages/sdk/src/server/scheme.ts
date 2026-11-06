@@ -52,7 +52,8 @@ export class RadiusExactScheme implements SchemeNetworkServer {
   private facilitatorExtensions: string[] | undefined;
   /**
    * Schemes of every network the server offers (this one included). The gas-sponsoring
-   * declaration is shared by all offers in a 402, so it stays while any of them declares it.
+   * declaration is shared by all offers in a 402, so it stays while any Permit2 offer's
+   * network declares it.
    */
   peers: readonly RadiusExactScheme[] = [this];
 
@@ -98,20 +99,31 @@ export class RadiusExactScheme implements SchemeNetworkServer {
     };
   }
 
-  /** True when 402 responses should declare `eip2612GasSponsoring`. */
+  /**
+   * True when this network's Permit2 offers should declare `eip2612GasSponsoring`. The
+   * declaration only ever applies to Permit2 offers (see `enrichPaymentRequiredResponse`).
+   */
   declaresGasSponsoring(): boolean {
     if (this.gasSponsoring !== 'auto') return this.gasSponsoring;
     return this.facilitatorExtensions?.includes(EIP2612_GAS_SPONSORING) ?? true;
   }
 
   /**
-   * Routes declare gas sponsoring statically; strip the declaration when the
-   * facilitator does not actually support it, so clients fall back to a normal
-   * Permit2 approval instead of sending a permit nobody will honour.
+   * Routes declare gas sponsoring statically. Keep the declaration only while the 402 carries a
+   * Permit2 offer whose network declares it: EIP-3009 offers need no approval, so the
+   * declaration would only mislead, and on a facilitator that does not sponsor approvals,
+   * clients must fall back to a normal Permit2 approval instead of sending a permit nobody
+   * will honour.
    */
   enrichPaymentRequiredResponse = async (ctx: SchemePaymentRequiredContext): Promise<void> => {
     const ext = ctx.paymentRequiredResponse.extensions;
-    if (ext && EIP2612_GAS_SPONSORING in ext && !this.peers.some((p) => p.declaresGasSponsoring())) {
+    if (!ext || !(EIP2612_GAS_SPONSORING in ext)) return;
+    const sponsoredPermit2Offer = ctx.paymentRequiredResponse.accepts.some(
+      (offer) =>
+        offer.extra?.assetTransferMethod === 'permit2' &&
+        this.peers.some((p) => p.network.network === offer.network && p.declaresGasSponsoring()),
+    );
+    if (!sponsoredPermit2Offer) {
       delete ext[EIP2612_GAS_SPONSORING];
       if (Object.keys(ext).length === 0) delete ctx.paymentRequiredResponse.extensions;
     }
