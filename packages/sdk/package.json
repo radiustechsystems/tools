@@ -28,6 +28,10 @@
     "./client": {
       "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
+    },
+    "./signers/proxy": {
+      "types": "./dist/signers/proxy.d.ts",
+      "default": "./dist/signers/proxy.js"
     }
   },
   "scripts": {

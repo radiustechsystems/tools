@@ -5,7 +5,7 @@ import { encodeFunctionData, isAddress, parseEther, verifyMessage, type Address,
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { radiusNetwork, resolveConfig, readPasswordless, writeCachedAddress, writePasswordless } from '../lib/config.js';
 import { changeKeystorePassword, keystoreExists, loadKeystorePrivateKey, saveKeystore } from '../lib/keystore.js';
-import { getOwnAddress, requireAccount } from '../lib/account.js';
+import { assertKeystoreWallet, getOwnAddress, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
 import { formatBalanceLines, parseAmountArg, parseTokenArg, readBalances } from '../lib/erc20.js';
 import { signJwt } from '../lib/jwt.js';
@@ -57,6 +57,7 @@ export function registerWallet(program: Command): void {
     .action(async (subOpts: { force?: boolean }, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       const cfg = resolveConfig(opts);
+      assertKeystoreWallet(cfg, 'wallet new');
       if (keystoreExists(cfg.keystorePath) && !subOpts.force) {
         throw new Error(`Keystore already exists at ${cfg.keystorePath}. Use --force to overwrite.`);
       }
@@ -81,6 +82,7 @@ export function registerWallet(program: Command): void {
     .action(async (privateKeyArg: string, subOpts: { force?: boolean }, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       const cfg = resolveConfig(opts);
+      assertKeystoreWallet(cfg, 'wallet import');
       if (keystoreExists(cfg.keystorePath) && !subOpts.force) {
         throw new Error(`Keystore already exists at ${cfg.keystorePath}. Use --force to overwrite.`);
       }
@@ -104,6 +106,7 @@ export function registerWallet(program: Command): void {
     .action(async (subOpts: { remove?: boolean }, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       const cfg = resolveConfig(opts);
+      assertKeystoreWallet(cfg, 'wallet password');
       if (!keystoreExists(cfg.keystorePath)) {
         throw new Error(`No keystore at ${cfg.keystorePath}. Run \`radius-cli wallet new\` or \`radius-cli wallet import\` first.`);
       }
@@ -157,6 +160,7 @@ export function registerWallet(program: Command): void {
     .action(async (_subOpts, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       const cfg = resolveConfig(opts);
+      if (!opts.privateKey) assertKeystoreWallet(cfg, 'wallet export');
       if (!opts.privateKey && !keystoreExists(cfg.keystorePath)) {
         throw new Error(
           `No keystore at ${cfg.keystorePath}. Run \`radius-cli wallet new\` or pass --private-key.`,

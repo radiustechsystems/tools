@@ -51,6 +51,8 @@ The first command creates the wallet. Keep `.radius/` out of version control, an
 
 Fund the wallet with testnet {STABLECOIN}: see [create and fund a wallet](/build/wallet).
 
+To keep the key off the machine that runs the agent, point the CLI or the SDK at a [wallet proxy](/build/wallet-proxy) instead: a service that holds hosted-wallet credentials and signs on request, so the runtime gets only a URL, an alias, and an access token.
+
 ## Set spending limits
 
 Decide which endpoints the agent may pay, and the most it may pay per request.

@@ -39,7 +39,7 @@ console.log(response.status, await response.text());
 
 `payFetch` takes the same arguments as `fetch`. Responses that are not `402` come back unchanged, so you can use it for every request to a paid API.
 
-`signer` accepts a private key, a viem account (for example from `privateKeyToAccount`), or a viem `WalletClient`, such as one connected to a browser wallet. Load private keys from a secret manager; never commit or log them.
+`signer` accepts a private key, a viem account (for example from `privateKeyToAccount`), or a viem `WalletClient`, such as one connected to a browser wallet. Load private keys from a secret manager; never commit or log them. To keep the key out of the process entirely, use a [wallet proxy](/build/wallet-proxy) as the signer.
 
 ## Limit what you pay
 

@@ -29,7 +29,7 @@ command -v radius-cli
 radius-cli --help
 ```
 
-Use `radius-cli` version `0.4.0` or later. From `0.3.0`, `wallet balance` reports {NATIVE_TOKEN} and {STABLECOIN} separately, and `wallet send` transfers any ERC-20. From `0.4.0`, `wallet pay` (formerly `wallet x402`, with `--threshold` and `--approve-permit2` formerly `--x402-threshold` and `--x402-approve-permit2`) also pays MPP challenges and USDC on Base. From `0.5.0`, `sell check` checks a seller's `402` before you deploy it. From `0.7.0`, `receipt --event` decodes logs, `wallet password` adds or changes the keystore password, and `wallet balance` prints one line per asset. Verify that your installed binary exposes the payment command:
+Use `radius-cli` version `0.4.0` or later. From `0.3.0`, `wallet balance` reports {NATIVE_TOKEN} and {STABLECOIN} separately, and `wallet send` transfers any ERC-20. From `0.4.0`, `wallet pay` (formerly `wallet x402`, with `--threshold` and `--approve-permit2` formerly `--x402-threshold` and `--x402-approve-permit2`) also pays MPP challenges and USDC on Base. From `0.5.0`, `sell check` checks a seller's `402` before you deploy it. From `0.7.0`, `receipt --event` decodes logs, `wallet password` adds or changes the keystore password, and `wallet balance` prints one line per asset. From `0.8.0`, `RADIUS_WALLET=proxy` signs with a [wallet proxy](/build/wallet-proxy) instead of the keystore. Verify that your installed binary exposes the payment command:
 
 ```bash
 radius-cli --version
@@ -87,13 +87,28 @@ RADIUS_HOME=.radius RADIUS_NEW_PASSWORD='use-a-secret-manager' radius-cli wallet
 
 Without `RADIUS_NEW_PASSWORD`, `wallet password` prompts for the new password. Either way it needs at least 8 characters; to remove the password, pass `--remove`. If the keystore already has a password, pass the current one in `RADIUS_PASSWORD` or at the prompt. `wallet new --force` replaces the key with a new one, so do not use it to add a password to a wallet that holds funds.
 
+## Wallet proxy
+
+To keep the key out of the agent runtime altogether, set `RADIUS_WALLET=proxy` and point the CLI at a [wallet proxy](/build/wallet-proxy): a service that holds hosted-wallet credentials (Privy, Coinbase CDP, or Para) and signs on request.
+
+```bash
+export RADIUS_WALLET=proxy
+export RADIUS_WALLET_PROXY_URL=https://wallet-proxy.example.workers.dev
+export RADIUS_WALLET_ALIAS=agent0-main
+export RADIUS_WALLET_PROXY_TOKEN=use-a-secret-manager   # if the proxy uses a bearer token
+
+RADIUS_NETWORK=testnet radius-cli wallet address
+```
+
+Every account-needing command then signs through the proxy, and `wallet pay` asks it to sign only after an offer has been accepted. `wallet new`, `wallet import`, `wallet password`, and `wallet export` refuse, because the proxy does not export or replace its key. `--private-key` still overrides it. `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are sent as Cloudflare Access service-token headers when set.
+
 ## Configuration precedence
 
 `radius-cli` resolves configuration in this order:
 
 1. CLI flags: `--network`, `--rpc-url`, `--sbc`, `--rusd`, `--json`, `--private-key`
-2. Environment: `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_PASSWORD`, `RADIUS_NEW_PASSWORD`, `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`
-3. Radius config file in the active Radius home
+2. Environment: `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_PASSWORD`, `RADIUS_NEW_PASSWORD`, `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`, `RADIUS_WALLET`, `RADIUS_WALLET_PROXY_URL`, `RADIUS_WALLET_ALIAS`, `RADIUS_WALLET_PROXY_TOKEN`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`
+3. Radius config file in the active Radius home (`network`, `rpcUrl`, `sbcAddress`, `rusdAddress`, `wallet`, `payNetworks`, `rpcUrls`)
 4. Built-in defaults
 
 {STABLECOIN} defaults to <code>{SBC_CONTRACT}</code>, its address on both mainnet and testnet. Set `RADIUS_SBC_ADDRESS` or pass `--sbc` only to use another deployment of the same token.
