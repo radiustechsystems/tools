@@ -276,7 +276,7 @@ Use `radius-cli sell check <url>` on your own paid route, locally or deployed, t
 - the facilitator's `/supported` lists each offer's scheme, network and transfer method: the network's default facilitator, or the ones given with `--facilitator <url>` (`RADIUS_FACILITATOR_API_KEY` is sent as `x-api-key`)
 - a `radius-sdk` buyer would select the offer, and each MPP challenge mirrors an x402 offer
 - a request with a malformed payment credential (`PAYMENT-SIGNATURE`, or `X-PAYMENT` for an x402 v1 challenge, and `Authorization: Payment` when the route offers MPP) gets a `402`, not a `5xx` or the paid content
-- the seller's OpenAPI document, when it publishes one, lists the route with an `x-payment-info` that agrees with the `402`
+- the seller's OpenAPI document, when it publishes one, lists the route as paid (`x-radius-price` matching the `402`, or a documented `402` response)
 
 ```bash
 radius-cli sell check http://localhost:8787/api/lookup --price '$0.001'
@@ -290,14 +290,33 @@ A buyer whose payment header is corrupted, truncated or signed for another chall
 
 ### OpenAPI discovery
 
-Agents that discover paid routes from an OpenAPI document look for an `x-payment-info` object on each paid operation. `sell check` reads `/openapi.json` on the route's origin, or the URL or file given with `--openapi <url|file>`, and checks that:
+The Radius Platform can propose a project's endpoints from your OpenAPI document, one per operation. It reads two operation extensions: `x-radius-price`, the price per call in USD as a decimal string such as `"0.001"`, and `x-radius-free`, which marks the operation free. An operation with neither is paid at the project's default price when it documents a `402` response, and free otherwise.
+
+```json
+{
+  "paths": {
+    "/api/lookup": {
+      "get": {
+        "x-radius-price": "0.001",
+        "responses": {
+          "200": { "description": "The lookup result" },
+          "402": { "description": "Payment required" }
+        }
+      }
+    }
+  }
+}
+```
+
+`sell check` reads `/openapi.json` on the route's origin, or the URL or file given with `--openapi <url|file>`, and checks that:
 
 - the document lists the route and method (paths are matched after any `servers` prefix, and `{param}` templates match one path segment)
-- the operation has an `x-payment-info` object
-- its `protocols`, when it lists them, name `x402` and `mpp` exactly when the `402` offers them
-- its price, when it can be read without guessing the unit, matches an x402 offer: a `$`-prefixed USD string such as `"$0.001"`, `{ "amount": "0.001", "currency": "USD" }`, or an atomic amount with the asset address as `currency`
+- the operation has an `x-radius-price` equal to the `402` offer's price (the offer's atomic amount converted with the asset's decimals, as for `--price`), or documents a `402` response
+- the operation is not marked `x-radius-free`, since the route answers `402`
 
-There is no ratified schema for `x-payment-info` yet, so these checks warn and never fail. A missing `/openapi.json` is reported as `info`. `--no-openapi` skips the check.
+Some x402 discovery tools read an `x-payment-info` object instead. It has no ratified schema and the Radius Platform does not read it, so `sell check` never requires it: when an operation has one, its `protocols` and its price (a `$`-prefixed USD string, `{ "amount": "0.001", "currency": "USD" }`, or an atomic amount with the asset address as `currency`) must agree with the `402`.
+
+These checks warn and never fail. A missing `/openapi.json` is reported as `info`. `--no-openapi` skips the check.
 
 ### Score and CI
 

@@ -1,13 +1,19 @@
 /**
  * `sell check` discovery lint: does the seller's OpenAPI document list the priced route, and does
- * the operation's `x-payment-info` agree with the 402?
+ * the operation say it is paid, at the price the 402 asks?
  *
- * There is no ratified schema for `x-payment-info` yet. This lint relies only on what discovery
- * tools in the x402 ecosystem read: an OpenAPI document at `/openapi.json`, an `x-payment-info`
- * object on each paid operation, an optional list of protocols (`x402`, `mpp`) and an optional
- * price. It compares the price only when it can read it without guessing: a `$`-prefixed USD
- * string (`"$0.001"`), `{ amount, currency: "USD" }`, or an atomic integer amount with the asset
- * address. Anything else in the object is left alone.
+ * It follows the convention the Radius Platform reads when it proposes endpoints from a seller's
+ * OpenAPI document, one per operation:
+ *
+ *   x-radius-price   the price per call in USD, as a decimal string such as "0.001"
+ *   x-radius-free    the operation is free
+ *   a 402 response   the operation is paid at the project's default price
+ *
+ * An operation with none of these is read as free. `x-payment-info`, which some x402 discovery
+ * tools read and which has no ratified schema, is only a fallback read when present: its protocols
+ * and its price are compared when they can be read without guessing the unit (a `$`-prefixed USD
+ * string, `{ amount, currency: "USD" }`, or an atomic amount with the asset address). It is never
+ * required.
  */
 import { resolvePrice, type PaymentNetwork, type Price } from 'radius-sdk';
 import type { CheckStatus } from './sellCheck.js';
@@ -192,31 +198,61 @@ export async function lintOpenApi(input: DiscoveryInput): Promise<DiscoveryCheck
     return out;
   }
   add('route', 'pass', `${loaded.source} lists ${input.method} ${found.template}`);
-  const info = found.operation['x-payment-info'];
-  if (info === undefined) {
-    add('paymentInfo', 'warn', `${input.method} ${found.template} has no x-payment-info: OpenAPI readers cannot tell it is paid, or what it costs`);
-    return out;
-  }
-  if (!isRecord(info)) {
-    add('paymentInfo', 'warn', `${input.method} ${found.template} x-payment-info is not an object`);
-    return out;
-  }
+  const op = `${input.method} ${found.template}`;
+  const operation = found.operation;
   const problems: string[] = [];
-  const protocols = declaredProtocols(info);
-  if (protocols) {
-    if (input.x402Offers.length > 0 && !protocols.includes('x402')) problems.push(`it lists protocols ${protocols.join(', ') || '(none)'}, but the 402 offers x402`);
-    if (input.hasMpp && !protocols.includes('mpp')) problems.push(`it lists protocols ${protocols.join(', ') || '(none)'}, but the 402 offers MPP`);
-    if (protocols.includes('mpp') && !input.hasMpp) problems.push('it lists mpp, but the 402 has no MPP challenge');
-    if (protocols.includes('x402') && input.x402Offers.length === 0) problems.push('it lists x402, but the 402 has no x402 offer');
+  const notes: string[] = [];
+
+  // The Radius convention: x-radius-free, x-radius-price, or a documented 402 response.
+  const free = operation['x-radius-free'];
+  const isFree = free === true || free === 'true';
+  if (isFree) problems.push('it is marked x-radius-free, but the route answers 402 (the Radius Platform would list it as free)');
+  const radiusPrice = operation['x-radius-price'];
+  const responses = isRecord(operation.responses) ? operation.responses : {};
+  let documentedPaid = false;
+  if (radiusPrice !== undefined) {
+    documentedPaid = true;
+    const usd = typeof radiusPrice === 'number' && Number.isFinite(radiusPrice) && radiusPrice >= 0 ? String(radiusPrice) : typeof radiusPrice === 'string' ? radiusPrice.trim() : undefined;
+    if (usd === undefined || !/^\d+(\.\d+)?$/.test(usd)) problems.push(`its x-radius-price ${JSON.stringify(radiusPrice)} is not a decimal USD string such as "0.001"`);
+    else if (input.x402Offers.length === 0) notes.push(`x-radius-price ${usd} USD (not compared: the 402 has no x402 offer)`);
+    else if (input.x402Offers.some((o) => matchesOffer({ usd: `$${usd}` }, o))) notes.push(`x-radius-price ${usd} USD matches the 402`);
+    else problems.push(`its x-radius-price ${usd} USD matches no x402 offer in the 402`);
+  } else if (Object.prototype.hasOwnProperty.call(responses, '402')) {
+    documentedPaid = true;
+    notes.push('documents a 402 response (priced at the project default price; add x-radius-price to state the price)');
   }
-  const price = declaredPrice(info);
-  let priceNote = '';
-  if (price && input.x402Offers.length > 0) {
-    const shown = 'usd' in price ? price.usd : `${price.atomic} atomic units${price.asset ? ` of ${price.asset}` : ''}`;
-    if (input.x402Offers.some((o) => matchesOffer(price, o))) priceNote = `, price ${shown} matches the 402`;
-    else problems.push(`its price ${shown} matches no x402 offer in the 402`);
-  } else if (!price) priceNote = ' (price not compared: no "$"-prefixed USD price, { amount, currency: "USD" }, or atomic amount with an asset address)';
-  if (problems.length) add('paymentInfo', 'warn', `${input.method} ${found.template} x-payment-info disagrees with the 402: ${problems.join('; ')}`);
-  else add('paymentInfo', 'pass', `${input.method} ${found.template} declares x-payment-info${protocols ? ` (${protocols.join(', ')})` : ''}${priceNote}`);
+
+  // Fallback: x-payment-info is read when present, never required.
+  const info = operation['x-payment-info'];
+  if (info !== undefined) {
+    const before = problems.length;
+    if (!isRecord(info)) problems.push('its x-payment-info is not an object');
+    else {
+      documentedPaid = true;
+      const protocols = declaredProtocols(info);
+      if (protocols) {
+        const listed = protocols.join(', ') || '(none)';
+        if (input.x402Offers.length > 0 && !protocols.includes('x402')) problems.push(`its x-payment-info lists protocols ${listed}, but the 402 offers x402`);
+        if (input.hasMpp && !protocols.includes('mpp')) problems.push(`its x-payment-info lists protocols ${listed}, but the 402 offers MPP`);
+        if (protocols.includes('mpp') && !input.hasMpp) problems.push('its x-payment-info lists mpp, but the 402 has no MPP challenge');
+        if (protocols.includes('x402') && input.x402Offers.length === 0) problems.push('its x-payment-info lists x402, but the 402 has no x402 offer');
+      }
+      const price = declaredPrice(info);
+      if (price && input.x402Offers.length > 0) {
+        const shown = 'usd' in price ? price.usd : `${price.atomic} atomic units${price.asset ? ` of ${price.asset}` : ''}`;
+        if (!input.x402Offers.some((o) => matchesOffer(price, o))) problems.push(`its x-payment-info price ${shown} matches no x402 offer in the 402`);
+      }
+      if (problems.length === before) notes.push('x-payment-info agrees with the 402');
+    }
+  }
+
+  if (!documentedPaid && !isFree) {
+    problems.push('it has neither x-radius-price nor a documented 402 response, so OpenAPI readers such as the Radius Platform treat it as free (add "x-radius-price": "<USD per call>" or a 402 response)');
+  } else if (!isFree && radiusPrice === undefined && !Object.prototype.hasOwnProperty.call(responses, '402') && problems.length === 0) {
+    // Only x-payment-info: fine for tools that read it, but the Radius Platform does not.
+    notes.push('the Radius Platform does not read x-payment-info; add x-radius-price or a 402 response for it');
+  }
+  if (problems.length) add('price', 'warn', `${op} disagrees with the 402: ${problems.join('; ')}`);
+  else add('price', 'pass', `${op} is documented as paid: ${notes.join('; ')}`);
   return out;
 }

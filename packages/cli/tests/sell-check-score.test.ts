@@ -13,7 +13,7 @@ describe('sell check score', () => {
 
   it('classifies blocking checks, and lets a check override it', () => {
     for (const id of ['status', 'x402', 'resource', 'offer[2].facilitator', 'buyer.x402', 'buyer.mpp', 'mpp[0].challenge', 'pay', 'pay.receipt']) expect(isBlocking({ id }), id).toBe(true);
-    for (const id of ['cache', 'head', 'mpp', 'mpp[1].mirror', 'offer[0].gasSponsoring', 'free-quota', 'credentials.mpp', 'discovery.paymentInfo']) expect(isBlocking({ id }), id).toBe(false);
+    for (const id of ['cache', 'head', 'mpp', 'mpp[1].mirror', 'offer[0].gasSponsoring', 'free-quota', 'credentials.mpp', 'discovery.price']) expect(isBlocking({ id }), id).toBe(false);
     expect(isBlocking({ id: 'credentials.x402', blocking: true })).toBe(true);
   });
 

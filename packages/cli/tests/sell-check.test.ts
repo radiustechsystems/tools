@@ -564,29 +564,47 @@ describe('radius-cli sell check', () => {
       expect(discovery(skipped)).toEqual([]);
     });
 
-    it('passes a route whose x-payment-info agrees with the 402', async () => {
-      const { fac, base } = await docSeller({ openapi: '3.1.0', info: { title: 't', version: '1' }, paths: { '/api/report': operation({ 'x-payment-info': { protocols: ['x402', 'mpp'], price: '$0.001' } }) } });
+    /** An operation with no 402 response, so only its x-radius-* or x-payment-info extensions say it is paid. */
+    const unpriced = (extra: Record<string, unknown> = {}) => ({ get: { summary: 'Report', responses: { '200': { description: 'ok' } }, ...extra } });
+    const message = (report: SellCheckReport, id: string) => report.checks.find((c) => c.id === id)?.message;
+
+    it('passes a route whose x-radius-price agrees with the 402, compared in USD with the asset decimals', async () => {
+      const { fac, base } = await docSeller({ openapi: '3.1.0', info: { title: 't', version: '1' }, paths: { '/api/report': unpriced({ 'x-radius-price': '0.001' }) } });
       const report = await checkSeller({ url: `${base}/api/report`, facilitators: [fac.url] });
-      expect(discovery(report)).toEqual([['discovery.route', 'pass'], ['discovery.paymentInfo', 'pass']]);
-      expect(report.checks.find((c) => c.id === 'discovery.paymentInfo')?.message).toMatch(/\(x402, mpp\), price \$0\.001 matches the 402/);
+      expect(discovery(report)).toEqual([['discovery.route', 'pass'], ['discovery.price', 'pass']]);
+      expect(message(report, 'discovery.price')).toMatch(/x-radius-price 0\.001 USD matches the 402/);
       expect(report.score).toBe(100);
     });
 
-    it('reads { amount, currency: USD } and atomic prices, templates and server prefixes', async () => {
-      const { fac, base } = await docSeller({ openapi: '3.0.3', servers: [{ url: '/api' }], paths: { '/{name}': operation({ 'x-payment-info': { price: { amount: '0.001', currency: 'USD' } } }) } });
+    it('passes a documented 402 response, with templates and server prefixes', async () => {
+      const { fac, base } = await docSeller({ openapi: '3.0.3', servers: [{ url: '/api' }], paths: { '/{name}': operation() } });
       const report = await checkSeller({ url: `${base}/api/report`, facilitators: [fac.url] });
-      expect(discovery(report)).toEqual([['discovery.route', 'pass'], ['discovery.paymentInfo', 'pass']]);
-      expect(report.checks.find((c) => c.id === 'discovery.route')?.message).toMatch(/lists GET \/\{name\}/);
-      const atomic = await checkSeller({ url: `${base}/api/report`, facilitators: [fac.url], openapi: { source: 'openapi.json', document: { openapi: '3.1.0', paths: { '/api/report': operation({ 'x-payment-info': { amount: '1000', currency: TESTNET.asset.address } }) } } } });
-      expect(statusOf(atomic, 'discovery.paymentInfo')).toBe('pass');
+      expect(discovery(report)).toEqual([['discovery.route', 'pass'], ['discovery.price', 'pass']]);
+      expect(message(report, 'discovery.route')).toMatch(/lists GET \/\{name\}/);
+      expect(message(report, 'discovery.price')).toMatch(/documents a 402 response \(priced at the project default price/);
     });
 
-    it('warns when the route, its operation or its x-payment-info is missing, or disagrees with the 402', async () => {
+    it('reads x-payment-info as a fallback when present: { amount, currency: USD } and atomic prices', async () => {
+      const { fac, base } = await docSeller({ openapi: '3.1.0', paths: { '/api/report': unpriced({ 'x-payment-info': { protocols: ['x402', 'mpp'], price: { amount: '0.001', currency: 'USD' } } }) } });
+      const report = await checkSeller({ url: `${base}/api/report`, facilitators: [fac.url] });
+      expect(statusOf(report, 'discovery.price')).toBe('pass');
+      expect(message(report, 'discovery.price')).toMatch(/x-payment-info agrees with the 402; the Radius Platform does not read x-payment-info/);
+      const atomic = await checkSeller({ url: `${base}/api/report`, facilitators: [fac.url], openapi: { source: 'openapi.json', document: { openapi: '3.1.0', paths: { '/api/report': unpriced({ 'x-payment-info': { amount: '1000', currency: TESTNET.asset.address } }) } } } });
+      expect(statusOf(atomic, 'discovery.price')).toBe('pass');
+      // Alongside x-radius-price, it is still compared.
+      const both = await checkSeller({ url: `${base}/api/report`, facilitators: [fac.url], openapi: { source: 'openapi.json', document: { openapi: '3.1.0', paths: { '/api/report': unpriced({ 'x-radius-price': '0.001', 'x-payment-info': { price: '$0.002' } }) } } } });
+      expect(message(both, 'discovery.price')).toMatch(/its x-payment-info price \$0\.002 matches no x402 offer/);
+    });
+
+    it('warns when the route or its operation is missing, it is documented as free, or its price disagrees with the 402', async () => {
       const cases: [unknown, string, RegExp][] = [
         [{ openapi: '3.1.0', paths: { '/other': operation() } }, 'discovery.route', /lists no path for \/api\/report/],
         [{ openapi: '3.1.0', paths: { '/api/report': { post: {} } } }, 'discovery.route', /no GET operation/],
-        [{ openapi: '3.1.0', paths: { '/api/report': operation() } }, 'discovery.paymentInfo', /has no x-payment-info/],
-        [{ openapi: '3.1.0', paths: { '/api/report': operation({ 'x-payment-info': { protocols: ['x402'], price: '$0.002' } }) } }, 'discovery.paymentInfo', /the 402 offers MPP; its price \$0\.002 matches no x402 offer/],
+        [{ openapi: '3.1.0', paths: { '/api/report': unpriced() } }, 'discovery.price', /neither x-radius-price nor a documented 402 response, so OpenAPI readers such as the Radius Platform treat it as free/],
+        [{ openapi: '3.1.0', paths: { '/api/report': unpriced({ 'x-radius-price': '0.002' }) } }, 'discovery.price', /its x-radius-price 0\.002 USD matches no x402 offer/],
+        [{ openapi: '3.1.0', paths: { '/api/report': unpriced({ 'x-radius-price': '$0.001' }) } }, 'discovery.price', /x-radius-price "\$0\.001" is not a decimal USD string/],
+        [{ openapi: '3.1.0', paths: { '/api/report': operation({ 'x-radius-free': true }) } }, 'discovery.price', /marked x-radius-free, but the route answers 402/],
+        [{ openapi: '3.1.0', paths: { '/api/report': operation({ 'x-payment-info': { protocols: ['x402'], price: '$0.002' } }) } }, 'discovery.price', /the 402 offers MPP; its x-payment-info price \$0\.002 matches no x402 offer/],
         [{ title: 'not openapi' }, 'discovery.openapi', /is not an OpenAPI document/],
       ];
       for (const [doc, id, message] of cases) {
