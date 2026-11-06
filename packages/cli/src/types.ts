@@ -16,6 +16,8 @@ export interface GlobalOptions {
   network?: string;
   rpcUrl?: string;
   privateKey?: string;
+  /** File holding the keystore password (`--password-file`). */
+  passwordFile?: string;
   sbc?: string;
   rusd?: string;
   json?: boolean;

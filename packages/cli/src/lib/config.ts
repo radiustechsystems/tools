@@ -58,9 +58,23 @@ export function resolveConfig(opts: GlobalOptions): ResolvedConfig {
   );
 
   const keystorePath = process.env.RADIUS_KEYSTORE_PATH ?? DEFAULT_KEYSTORE_PATH;
-  const password = process.env.RADIUS_PASSWORD;
+  const password = opts.passwordFile !== undefined ? readPasswordFile(opts.passwordFile) : process.env.RADIUS_PASSWORD;
 
   return { network, chain, rpcUrl, sbcAddress, rusdAddress, keystorePath, password };
+}
+
+/**
+ * The keystore password in `path`, without one trailing newline (as `echo` and most secret mounts
+ * write it). The error names the file, never its contents.
+ */
+export function readPasswordFile(path: string): string {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (e) {
+    throw new Error(`--password-file: cannot read ${path} (${(e as NodeJS.ErrnoException).code ?? (e as Error).message})`);
+  }
+  return text.replace(/\r?\n$/, '');
 }
 
 /** The configured Radius network (mainnet or testnet) with the `--rpc-url` / `--sbc` overrides applied. */
