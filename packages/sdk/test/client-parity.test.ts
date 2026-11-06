@@ -10,7 +10,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { maxUint256, recoverTypedDataAddress, toHex, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { createRadiusFetch, getPaymentReceipt, RadiusPaymentError, type ApprovalRequest, type InvalidChallengeDetails, type PaymentOffer, type PaymentReceipt, type PaymentRejectedDetails, type RadiusFetchOptions } from '../src/client/index.js';
+import { createRadiusFetch, getPaymentReceipt, RadiusPaymentError, type ApprovalRequest, type InvalidChallengeDetails, type PaymentOffer, type PaymentReceipt, type PaymentRejectedDetails, type RadiusFetchOptions, type InvalidReceiptDetails } from '../src/client/index.js';
 import { PERMIT2_ADDRESS, X402_EXACT_PERMIT2_PROXY, resolveNetwork } from '../src/networks.js';
 
 const PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
@@ -22,6 +22,7 @@ const X402_UPTO_PERMIT2_PROXY = '0x4020A4f3b7b90ccA423B9fabCc0CE57C6C240002';
 const CHAIN_ID = 84532;
 const NETWORK_ID = `eip155:${CHAIN_ID}`;
 const RESOURCE_URL = 'https://api.example.com/r';
+const TX = `0x${'ab'.repeat(32)}`;
 
 // The CLI tests' chain 84532 / USDC is the Base Sepolia preset; the RPC goes nowhere (stubbed where needed).
 const NETWORK = resolveNetwork('base-sepolia', { rpcUrl: 'http://127.0.0.1:1' });
@@ -366,7 +367,7 @@ describe('upto@v2', () => {
 });
 
 describe('upto@v2 settlement receipts', () => {
-  const paid = (receipt: Record<string, unknown>) => paidWithReceipt({ success: true, transaction: '0xabc', network: NETWORK_ID, payer: SIGNER.address, ...receipt });
+  const paid = (receipt: Record<string, unknown>) => paidWithReceipt({ success: true, transaction: TX, network: NETWORK_ID, payer: SIGNER.address, ...receipt });
 
   async function settle(receipt: Record<string, unknown>) {
     stubRpc();
@@ -376,15 +377,30 @@ describe('upto@v2 settlement receipts', () => {
   }
 
   it('reports the actually charged amount (zero or partial) from the PAYMENT-RESPONSE', async () => {
-    expect((await settle({ amount: '60' })).receipt.amount).toBe('60');
-    expect((await settle({ amount: '0' })).receipt.amount).toBe('0');
+    expect((await settle({ amount: '60' })).receipt).toMatchObject({ amount: '60', charge: { scheme: 'upto', authorized: '500000', reported: '60', evidence: 'reported' } });
     expect((await settle({ amount: '500000' })).receipt.amount).toBe('500000');
   });
 
-  it('falls back to the authorised maximum when the facilitator reports no amount', async () => {
+  it('adds the asset and its decimals to the receipt', async () => {
+    expect((await settle({ amount: '60' })).receipt).toMatchObject({ asset: ASSET, decimals: 6 });
+  });
+
+  it('treats a missing amount as incomplete evidence, not the authorised maximum', async () => {
     const { res, receipt } = await settle({});
     expect(res.status).toBe(200);
-    expect(receipt).toMatchObject({ success: true, amount: '500000', transaction: '0xabc' });
+    expect(receipt).toMatchObject({ success: true, transaction: TX, charge: { scheme: 'upto', authorized: '500000', evidence: 'incomplete' } });
+    expect(receipt.amount).toBeUndefined();
+    expect(receipt.charge?.reported).toBeUndefined();
+  });
+
+  it('accepts a zero charge without a transaction', async () => {
+    const { receipt } = await settle({ amount: '0', transaction: '' });
+    expect(receipt).toMatchObject({ success: true, amount: '0', charge: { evidence: 'zero', reported: '0' } });
+    expect(receipt.transaction).toBeUndefined();
+  });
+
+  it('rejects a non-zero charge without a transaction', async () => {
+    await rejects(settle({ amount: '60', transaction: '' }), 'invalid_receipt', /names no transaction/);
   });
 
   it('rejects a settlement above the signed maximum', async () => {
@@ -398,15 +414,50 @@ describe('upto@v2 settlement receipts', () => {
     await rejects(settle({ amount: 5 }), 'invalid_receipt', /non-negative integer/);
   });
 
+  it('rejects a receipt for another network, payer or a malformed transaction, and hands back the response', async () => {
+    const error = await settle({ amount: '60', network: 'eip155:72344' }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(RadiusPaymentError);
+    const details = (error as RadiusPaymentError).details as InvalidReceiptDetails;
+    expect(details.reason).toBe('network_mismatch');
+    expect(details.receipt?.network).toBe('eip155:72344');
+    expect(await details.response?.json()).toEqual({ ok: true });
+    await rejects(settle({ amount: '60', payer: PAY_TO }), 'invalid_receipt', /is not the signer/);
+    await rejects(settle({ amount: '60', transaction: '0xabc' }), 'invalid_receipt', /not a 32-byte hex hash/);
+  });
+
   it('does not treat an unsuccessful receipt as settled', async () => {
     const { receipt } = await settle({ success: false, errorReason: 'settlement_failed', transaction: '' });
     expect(receipt.success).toBe(false);
     expect(receipt.amount).toBeUndefined();
+    expect(receipt.charge).toEqual({ scheme: 'upto', authorized: '500000', reported: undefined, evidence: 'failed' });
+  });
+});
+
+describe('exact@v2 settlement receipts', () => {
+  const paid = (receipt: Record<string, unknown>) => paidWithReceipt({ success: true, transaction: TX, network: NETWORK_ID, payer: SIGNER.address, ...receipt });
+
+  async function settle(receipt: Record<string, unknown>) {
+    const receipts: PaymentReceipt[] = [];
+    const { res } = await pay(v2(EXACT_EIP3009), { onPaid: (r) => { receipts.push(r); } }, paid(receipt));
+    return { res, receipt: receipts[0] };
+  }
+
+  it('reports the price as an implied charge', async () => {
+    const { receipt } = await settle({});
+    expect(receipt).toMatchObject({ success: true, amount: '13000', asset: ASSET, decimals: 6, charge: { scheme: 'exact', authorized: '13000', evidence: 'implied' } });
+    expect((await settle({ amount: '13000' })).receipt.charge).toMatchObject({ reported: '13000', evidence: 'reported' });
   });
 
-  it('leaves exact receipts lenient: a malformed amount just means no receipt', async () => {
+  it('rejects a malformed amount, a different amount, another network, or no transaction', async () => {
+    await rejects(settle({ amount: 'nope' }), 'invalid_receipt', /non-negative integer/);
+    await rejects(settle({ amount: '12999' }), 'invalid_receipt', /price is 13000/);
+    await rejects(settle({ network: 'eip155:72344' }), 'invalid_receipt', /offer is on eip155:84532/);
+    await rejects(settle({ transaction: '' }), 'invalid_receipt', /names no transaction/);
+  });
+
+  it('leaves an undecodable exact header lenient: it just means no receipt', async () => {
     const receipts: PaymentReceipt[] = [];
-    const { res } = await pay(v2(EXACT_EIP3009), { onPaid: (r) => { receipts.push(r); } }, paid({ amount: 'nope' }));
+    const { res } = await pay(v2(EXACT_EIP3009), { onPaid: (r) => { receipts.push(r); } }, () => Response.json({ ok: true }, { headers: { 'PAYMENT-RESPONSE': 'not base64 json' } }));
     expect(res.status).toBe(200);
     expect(receipts).toHaveLength(0);
   });
@@ -624,7 +675,7 @@ describe('a 402 behind a redirect', () => {
 
   /** A paywall that, once paid, redirects (with the receipt) to `content`, which wants the token and no payment header. */
   const tokenShop = (contentOrigin: () => string, status = 302) => async (req: Seen, res: ServerResponse) => {
-    const receipt = b64({ success: true, transaction: '0xabc', network: NETWORK_ID, payer: SIGNER.address });
+    const receipt = b64({ success: true, transaction: TX, network: NETWORK_ID, payer: SIGNER.address });
     if (req.url.startsWith('/content')) return void (req.url.endsWith('token=abc') ? res.writeHead(200).end('content') : res.writeHead(403).end());
     if (req.headers['payment-signature']) return void res.writeHead(status, { location: `${contentOrigin()}/content?token=abc`, 'PAYMENT-RESPONSE': receipt }).end();
     res.writeHead(402, { 'PAYMENT-REQUIRED': b64(v2(EXACT_EIP3009)) }).end();
@@ -637,7 +688,7 @@ describe('a 402 behind a redirect', () => {
     origin = shop.origin;
     const res = await payer({ onPaid: (r) => void paid.push(r) })(`${shop.origin}/pay`, { headers: { 'X-Api-Key': 'k' } });
     expect([res.status, await res.text()]).toEqual([200, 'content']);
-    expect(getPaymentReceipt(res)).toMatchObject({ success: true, transaction: '0xabc' });
+    expect(getPaymentReceipt(res)).toMatchObject({ success: true, transaction: TX });
     expect(paid).toHaveLength(1);
     const followUp = shop.seen.at(-1)!;
     expect([followUp.url, followUp.headers['payment-signature'], followUp.headers['x-api-key']]).toEqual(['/content?token=abc', undefined, 'k']);

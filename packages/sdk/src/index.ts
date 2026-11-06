@@ -77,8 +77,10 @@ export { toAtomic, formatAmount, resolvePrice } from './amounts.js';
 export type { Price } from './amounts.js';
 export { RadiusPaymentError } from './errors.js';
 export type { RadiusPaymentErrorCode } from './errors.js';
-export { decodePaymentReceipt, decodeMppReceipt, getPaymentReceipt, parseUptoSettlementAmount, PAYMENT_RESPONSE_HEADER } from './receipt.js';
-export type { PaymentReceipt } from './receipt.js';
+export { decodePaymentReceipt, decodeMppReceipt, getPaymentReceipt, parseUptoSettlementAmount, validatePaymentReceipt, PAYMENT_RESPONSE_HEADER } from './receipt.js';
+export type { PaymentReceipt, PaymentCharge, ChargeEvidence, ReceiptExpectation, InvalidReceiptReason, InvalidReceiptDetails } from './receipt.js';
+// Reconciliation reads the chain with viem, so `reconcilePayment` lives on `radius-sdk/client`; only the types are re-exported here.
+export type { Settlement, SettlementTransfer, PaymentReconciliation, ReconciliationStatus, ReconciliationReason, ReconcileOffer, ReconcileOptions } from './settlement.js';
 export { radiusEnv } from './env.js';
 export type { RadiusEnvConfig } from './env.js';
 export { SUPPORTED_SCHEMES, describeSupportedSchemes } from './schemes.js';

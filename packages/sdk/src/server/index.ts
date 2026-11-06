@@ -14,7 +14,7 @@ import {
 import type { SettleResponse } from '@x402/core/types';
 import { resolveNetwork, explorerTxUrl, isNetworkId, overridesOf, type Address, type NetworkInput, type NetworkOverrides, type PaymentNetwork } from '../networks.js';
 import { resolvePrice, type Price } from '../amounts.js';
-import type { PaymentReceipt } from '../receipt.js';
+import type { ChargeEvidence, PaymentReceipt } from '../receipt.js';
 import { RadiusFacilitatorClient, withUnknownOutcomes, type FacilitatorOptions } from './facilitator.js';
 import { RadiusExactScheme, type GasSponsoringMode, type SettleMode } from './scheme.js';
 import { requestContext, requestOf } from './adapter.js';
@@ -192,9 +192,21 @@ function isServerNetwork(v: unknown): v is ServerNetwork {
   return typeof v === 'object' && v !== null && 'network' in v && !('chain' in v);
 }
 
-/** Turn a facilitator settle result into the receipt handed to application code. */
-export function toReceipt(r: SettleResponse, network: PaymentNetwork, requirements: { amount: string }): PaymentReceipt {
+/**
+ * Turn a facilitator settle result into the receipt handed to application code. Adds what the
+ * protocol response leaves out: the asset and its decimals, and `charge`, which keeps the offered
+ * amount apart from the charge the facilitator reported.
+ */
+export function toReceipt(r: SettleResponse, network: PaymentNetwork, requirements: { amount: string; scheme?: string; asset?: string }): PaymentReceipt {
   const transaction = r.transaction && r.transaction.length > 0 ? r.transaction : undefined;
+  const scheme = requirements.scheme === 'upto' ? 'upto' : 'exact';
+  const reported = typeof r.amount === 'string' ? r.amount : undefined;
+  const evidence: ChargeEvidence = !r.success
+    ? 'failed'
+    : reported === undefined
+      ? scheme === 'exact' ? 'implied' : 'incomplete'
+      : scheme === 'upto' && /^0+$/.test(reported) ? 'zero' : 'reported';
+  const asset = requirements.asset ?? network.asset.address;
   return {
     success: r.success,
     protocol: 'x402',
@@ -202,11 +214,14 @@ export function toReceipt(r: SettleResponse, network: PaymentNetwork, requiremen
     network: r.network,
     payer: r.payer,
     // `exact` settles precisely the requested amount; facilitators only report `amount`
-    // for schemes (like `upto`) where it can differ.
-    amount: r.amount ?? (r.success ? requirements.amount : undefined),
+    // for schemes (like `upto`) where it can differ. A missing `upto` amount stays missing.
+    amount: reported ?? (r.success && scheme === 'exact' ? requirements.amount : undefined),
     errorReason: r.errorReason,
     errorMessage: r.errorMessage,
     explorerUrl: transaction ? explorerTxUrl(network, transaction) : undefined,
+    asset,
+    decimals: asset.toLowerCase() === network.asset.address.toLowerCase() ? network.asset.decimals : undefined,
+    charge: { scheme, authorized: requirements.amount, reported, evidence },
   };
 }
 
