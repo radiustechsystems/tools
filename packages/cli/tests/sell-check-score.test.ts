@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Check } from '../src/lib/sellCheck.js';
-import { githubAnnotations, isBlocking, scoreChecks } from '../src/lib/sellCheckScore.js';
+import { blockingFailures, githubAnnotations, isBlocking, scoreChecks } from '../src/lib/sellCheckScore.js';
 
 const check = (id: string, status: Check['status'], extra: Partial<Check> = {}): Check => ({ id, status, message: `${id} ${status}`, ...extra });
 
@@ -15,6 +15,7 @@ describe('sell check score', () => {
     for (const id of ['status', 'x402', 'resource', 'offer[2].facilitator', 'buyer.x402', 'buyer.mpp', 'mpp[0].challenge', 'pay', 'pay.receipt']) expect(isBlocking({ id }), id).toBe(true);
     for (const id of ['cache', 'head', 'mpp', 'mpp[1].mirror', 'offer[0].gasSponsoring', 'free-quota', 'credentials.mpp', 'discovery.price']) expect(isBlocking({ id }), id).toBe(false);
     expect(isBlocking({ id: 'credentials.x402', blocking: true })).toBe(true);
+    expect(blockingFailures([check('status', 'pass'), check('buyer.x402', 'fail'), check('credentials.x402', 'fail'), check('credentials.mpp', 'fail', { blocking: true }), check('x402', 'warn')])).toBe(2);
   });
 
   it('scores 0 when the route does not answer 402, at most 50 when the 402 was not reached, never below 0', () => {

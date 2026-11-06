@@ -627,14 +627,15 @@ describe('radius-cli sell check', () => {
     });
   });
 
-  describe('the command: --ci, --min-score and GitHub Actions', () => {
+  describe('the command: --min-score, CI and GitHub Actions', () => {
     // The command sets process.exitCode rather than calling process.exit(), so piped stdout drains.
+    // CI markers are cleared unless a test sets them, so the suite behaves the same on a laptop and in CI.
     async function cli(env: Record<string, string | undefined>, ...args: string[]) {
       const program = new Command().option('--network <name>').option('--rpc-url <url>').option('--private-key <hex>').option('--password-file <path>').option('--sbc <address>').option('--rusd <address>').option('--json');
       registerSell(program);
       let stdout = '';
       let stderr = '';
-      for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
+      for (const [k, v] of Object.entries({ CI: undefined, GITHUB_ACTIONS: undefined, GITHUB_STEP_SUMMARY: undefined, ...env })) vi.stubEnv(k, v);
       const out = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { stdout += String(chunk); return true; });
       const err = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { stderr += String(chunk); return true; });
       const log = vi.spyOn(console, 'log').mockImplementation((s: unknown) => { stdout += `${String(s)}\n`; });
@@ -649,16 +650,16 @@ describe('radius-cli sell check', () => {
         vi.unstubAllEnvs();
       }
     }
-    /** A seller that answers a malformed credential with 500 (one non-blocking failure: score 85). */
-    const crashing = async () => {
+    /** A seller that answers a malformed credential with `status` (500: one non-blocking failure, score 85; 200: one blocking failure, score 60). */
+    const answering = async (status: number) => {
       const fac = await facilitator(radiusKinds);
-      const url = `${await seller({ facilitator: { url: fac.url } }, undefined, (req) => (req.headers.has('payment-signature') ? new Response('boom', { status: 500 }) : undefined))}/api/report`;
+      const url = `${await seller({ facilitator: { url: fac.url } }, undefined, (req) => (req.headers.has('payment-signature') ? new Response('body', { status }) : undefined))}/api/report`;
       return { fac, url };
     };
 
     it('prints the score and a per-check table, and --min-score sets the exit code', async () => {
-      const { fac, url } = await crashing();
-      const plain = await cli({ GITHUB_ACTIONS: undefined }, 'sell', 'check', url, '--facilitator', fac.url);
+      const { fac, url } = await answering(500);
+      const plain = await cli({}, 'sell', 'check', url, '--facilitator', fac.url);
       expect(plain.code).toBe(1);
       expect(plain.stdout).toMatch(/ {2}FAIL {2}-15 {2}credentials\.x402: /);
       expect(plain.stdout).toMatch(/ {2}ok {9}status: /);
@@ -669,24 +670,36 @@ describe('radius-cli sell check', () => {
       expect(above.stdout).toMatch(/^score: 85\/100 \(minimum 80: passed\)$/m);
       const below = await cli({}, 'sell', 'check', url, '--facilitator', fac.url, '--min-score', '90');
       expect(below.code).toBe(1);
-      expect(below.stdout).toMatch(/minimum 90: FAILED/);
+      expect(below.stdout).toMatch(/^score: 85\/100 \(minimum 90: FAILED\)$/m);
     });
 
-    it('--ci on GitHub Actions emits annotations and a step summary; --json keeps stdout JSON', async () => {
-      const { fac, url } = await crashing();
+    it('--min-score fails a run with a blocking failure, whatever the score', async () => {
+      const { fac, url } = await answering(200);
+      const run = await cli({}, 'sell', 'check', url, '--facilitator', fac.url, '--min-score', '50');
+      expect(run.stdout).toMatch(/ {2}FAIL {2}-40 {2}credentials\.x402: .*served without a valid payment/);
+      expect(run.stdout).toMatch(/^score: 60\/100 \(minimum 50: FAILED, 1 blocking failure\)$/m);
+      expect(run.code).toBe(1);
+      const zero = await cli({}, 'sell', 'check', url, '--facilitator', fac.url, '--min-score', '0');
+      expect(zero.code).toBe(1);
+    });
+
+    it('on GitHub Actions emits annotations and a step summary; --json keeps stdout JSON; CI alone prints none', async () => {
+      const { fac, url } = await answering(500);
       const summary = join(mkdtempSync(join(tmpdir(), 'sell-check-')), 'summary.md');
       writeFileSync(summary, '');
-      const env = { GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary };
-      const run = await cli(env, 'sell', 'check', url, '--facilitator', fac.url, '--ci', '--min-score', '80');
+      const env = { CI: 'true', GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary };
+      const run = await cli(env, 'sell', 'check', url, '--facilitator', fac.url, '--min-score', '80');
       expect(run.code).toBe(0);
       expect(run.stdout).toMatch(new RegExp(`^::error title=sell check credentials\\.x402%3A GET ${url.replace(/[.:/]/g, (c) => (c === ':' ? '%3A' : `\\${c}`))}::an unpaid GET with a malformed PAYMENT-SIGNATURE credential answered 500`, 'm'));
       expect(readFileSync(summary, 'utf8')).toMatch(/### radius-cli sell check: 85\/100 \(minimum 80: passed\)[\s\S]*\| fail \| -15 \| credentials\.x402 \|/);
-      const json = await cli(env, '--json', 'sell', 'check', url, '--facilitator', fac.url, '--ci');
+      const json = await cli(env, '--json', 'sell', 'check', url, '--facilitator', fac.url);
       expect(JSON.parse(json.stdout)).toMatchObject({ score: 85, checks: expect.arrayContaining([expect.objectContaining({ id: 'credentials.x402', status: 'fail', deduction: 15 })]) });
       expect(json.stderr).toMatch(/^::error /m);
-      // Off GitHub Actions, --ci prints no workflow commands.
-      const local = await cli({ GITHUB_ACTIONS: undefined, GITHUB_STEP_SUMMARY: undefined }, 'sell', 'check', url, '--facilitator', fac.url, '--ci');
-      expect(local.stdout).not.toMatch(/::error/);
+      // CI without GITHUB_ACTIONS: plain output, no workflow commands, no summary.
+      writeFileSync(summary, '');
+      const ci = await cli({ CI: 'true', GITHUB_STEP_SUMMARY: summary }, 'sell', 'check', url, '--facilitator', fac.url);
+      expect(ci.stdout).not.toMatch(/::error/);
+      expect(readFileSync(summary, 'utf8')).toBe('');
     });
   });
 });

@@ -331,9 +331,14 @@ Every run ends with a score from 0 to 100. A seller starts at 100 and loses poin
 
 A route that does not answer `402` scores 0. A run that never reached the `402`, such as a free quota that was not used up, scores at most 50. With `--pricing`, the score is the lowest route score. The text output shows the points each check cost next to it, and the score on the last line.
 
-`--min-score <n>` makes the score set the exit code: `1` when it is below `n`, otherwise `0`. Without it, the exit code is unchanged: `1` when any check failed.
+`--min-score <n>` lets a run pass with failures that do not stop buyers from paying. It exits `1` when the score is below `n`, or when any blocking failure occurred, whatever the score: buyers cannot pay, or the route is served without payment. Otherwise it exits `0`. Without `--min-score`, the exit code is unchanged: `1` when any check failed.
 
-`--ci` is for pipelines. It prints plain, stable text and never prompts or pays (`--pay` is refused). When `GITHUB_ACTIONS` is set, it also prints an `::error` annotation for each failed check and a `::warning` annotation for each warning, and appends a table of the checks to the job summary. With `--json`, the annotations go to stderr so stdout stays JSON. Run it as a step in a GitHub Actions workflow:
+`sell check` always prints plain text without color, so its output is stable in a CI log. There is no CI flag; the command reads the environment instead:
+
+- When `CI` or `GITHUB_ACTIONS` is set to anything but an empty string, `0` or `false`, `--pay` is refused with exit code `2`, so a CI run never pays and never prompts for a keystore password. Make the testnet payment from a terminal.
+- When `GITHUB_ACTIONS` is `true`, it also prints an `::error` annotation for each failed check and a `::warning` annotation for each warning, and appends a table of the checks to the job summary (`GITHUB_STEP_SUMMARY`). With `--json`, the annotations go to stderr so stdout stays JSON.
+
+Run it as a step in a GitHub Actions workflow:
 
 ```yaml
 jobs:
@@ -344,10 +349,10 @@ jobs:
         with:
           node-version: 22
       - name: Check the paid endpoint
-        run: npx radius-cli sell check https://staging.example.com/api/lookup --ci --min-score 80
+        run: npx radius-cli sell check https://staging.example.com/api/lookup --min-score 80
 ```
 
-The score, `--min-score`, `--ci`, and the malformed credential and OpenAPI checks need `radius-cli` 0.8.0 or later.
+The score, `--min-score`, the GitHub Actions output, the `--pay` refusal in CI, and the malformed credential and OpenAPI checks need `radius-cli` 0.8.0 or later.
 
 ### Free quotas
 
@@ -366,7 +371,7 @@ Each listed method of each route is checked (`ANY` with `GET`), in file order. T
 
 `--probe-head` also sends an unpaid `HEAD` and warns when it is served, because routers answer `HEAD` with the `GET` handler. `--pay --threshold <amount>` then makes one paid request from the local wallet and checks that a receipt comes back. It pays on testnet unless `--network mainnet` is given, whatever `RADIUS_NETWORK` says. Under an agent, pass the keystore password with `--password-file` or `RADIUS_PASSWORD`; without one and without a terminal, `--pay` exits `2` before any request. The paid request gets a longer timeout than `--timeout`, and if it still fails after the payment was sent, the report says the payment may have settled.
 
-The command prints one line per check (`ok`, `warn`, `FAIL`, `skip`, `info`, and the points it cost) and the score; with `--json`, stdout is one object with `ok`, `score`, `offers`, `mpp`, `facilitators`, `freeQuota` (when there is one), `checks` (each with `id`, `status`, `message`, and `deduction` when it cost points) and `summary`, or, with `--pricing`, `source`, `ok`, `score`, `routes` and `summary`. It exits `0` when no check failed, `1` when one did (or, with `--min-score`, when the score is below it), and `2` on invalid flags (a malformed `-H`, an unreadable `-d @file`, an unknown `--network`, a bad `--price`, `--threshold` or `--min-score`, an unreadable `--openapi` file, or `--pay` with `--ci`).
+The command prints one line per check (`ok`, `warn`, `FAIL`, `skip`, `info`, and the points it cost) and the score; with `--json`, stdout is one object with `ok`, `score`, `offers`, `mpp`, `facilitators`, `freeQuota` (when there is one), `checks` (each with `id`, `status`, `message`, and `deduction` when it cost points) and `summary`, or, with `--pricing`, `source`, `ok`, `score`, `routes` and `summary`. It exits `0` when no check failed, `1` when one did (or, with `--min-score`, when the score is below it or a blocking check failed), and `2` on invalid flags (a malformed `-H`, an unreadable `-d @file`, an unknown `--network`, a bad `--price`, `--threshold` or `--min-score`, an unreadable `--openapi` file, or `--pay` in CI).
 
 ## When to use other tools
 

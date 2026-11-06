@@ -28,6 +28,14 @@ export function isBlocking(check: Pick<Check, 'id' | 'blocking'>): boolean {
   return !NON_BLOCKING.some((re) => re.test(check.id));
 }
 
+/**
+ * Failed checks that stop buyers from paying, or serve the route without payment. `sell check
+ * --min-score` fails a run with any of these, whatever its score.
+ */
+export function blockingFailures(checks: Pick<Check, 'id' | 'status' | 'blocking'>[]): number {
+  return checks.filter((c) => c.status === 'fail' && isBlocking(c)).length;
+}
+
 /** Points a check costs (0 for pass, info and skip). */
 export function deductionOf(check: Pick<Check, 'id' | 'status' | 'blocking'>): number {
   if (check.status === 'fail') return isBlocking(check) ? SCORE_WEIGHTS.blockingFail : SCORE_WEIGHTS.fail;
