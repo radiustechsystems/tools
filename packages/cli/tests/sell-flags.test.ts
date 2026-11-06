@@ -56,6 +56,10 @@ describe('sell check flag validation', () => {
     ['an unreadable --pricing file', ['sell', 'check', '--pricing', '/nonexistent/pricing.md', '--base-url', 'http://127.0.0.1:9'], /--pricing \/nonexistent\/pricing.md: ENOENT/],
     ['a negative --free-requests', ['sell', 'check', url, '--free-requests', '-1'], /--free-requests must be an integer from 0 to 1000/],
     ['a huge --free-requests', ['sell', 'check', url, '--free-requests', '5000'], /--free-requests must be an integer/],
+    ['a non-integer --min-score', ['sell', 'check', url, '--min-score', '80.5'], /--min-score must be an integer from 0 to 100/],
+    ['a --min-score above 100', ['sell', 'check', url, '--min-score', '101'], /--min-score must be an integer from 0 to 100/],
+    ['--pay with --ci', ['sell', 'check', url, '--ci', '--pay', '--threshold', '0.01'], /--pay does not apply with --ci/],
+    ['an unreadable --openapi file', ['sell', 'check', url, '--openapi', '/nonexistent/openapi.json'], /--openapi \/nonexistent\/openapi.json: ENOENT/],
     ['an unreadable --password-file', ['--password-file', '/nonexistent/pw', 'sell', 'check', url], /--password-file: cannot read \/nonexistent\/pw \(ENOENT\)/],
   ])('exits 2 for %s', async (_name, args, message) => {
     const { code, stderr } = await run(...args);

@@ -146,6 +146,8 @@ The response is `402 Payment Required` with a `PAYMENT-REQUIRED` header describi
 radius-cli sell check http://localhost:8787/api/lookup --price '$0.001' --probe-head
 ```
 
+It ends with a score from 0 to 100. From `radius-cli` 0.7.0, it also checks that a malformed payment header gets a `402`, and you can run it in CI with `--ci --min-score 80` to fail a build that would break payments. See [Score and CI](/reference/radius-cli#score-and-ci).
+
 Then pay it from a funded testnet wallet with [`radius-cli`](/reference/radius-cli#paid-endpoints):
 
 ```bash

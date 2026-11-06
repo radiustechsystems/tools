@@ -4,10 +4,12 @@ import { jsonStringify } from '../lib/format.js';
 import { isSupportedVerb, looksLikeJson, parseHeaderArgs, readBodyArg, SUPPORTED_VERBS } from '../lib/http.js';
 import { parseUnits } from 'viem';
 import { resolvePrice } from 'radius-sdk';
-import { readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import type { Check, CheckStatus, SellCheckOptions, SellCheckReport } from '../lib/sellCheck.js';
 import type { RouteResult, RoutesReport } from '../lib/sellCheckRoutes.js';
 import type { PricingRoute } from '../lib/pricingMd.js';
+import { githubAnnotations } from '../lib/sellCheckScore.js';
+import type { OpenApiCache } from '../lib/sellCheckDiscovery.js';
 import type { GlobalOptions } from '../types.js';
 
 interface CheckOptions {
@@ -25,6 +27,10 @@ interface CheckOptions {
   pricing?: string;
   baseUrl?: string;
   param?: string[];
+  minScore?: string;
+  ci?: boolean;
+  /** A URL or file; false with --no-openapi. */
+  openapi?: string | boolean;
 }
 
 /** Matches DEFAULT_FREE_REQUESTS in lib/sellCheck (kept here so --help needs no lazy import). */
@@ -40,7 +46,16 @@ export function registerSell(program: Command): void {
       [
         'Request a paid endpoint without paying and check its 402: the x402 PAYMENT-REQUIRED offers (network, asset and',
         "decimals, amount, payTo, resource, maxTimeoutSeconds), the facilitator's /supported for each offer, any MPP",
-        'challenge, and whether a radius-sdk buyer would pay it. Exit 0 when no check fails, 1 otherwise, 2 on bad flags.',
+        'challenge, and whether a radius-sdk buyer would pay it. It also sends a malformed payment credential (the seller',
+        "should answer 402, not 500) and lints the seller's OpenAPI document (/openapi.json, or --openapi): the route is",
+        'listed and its x-payment-info agrees with the 402. Exit 0 when no check fails, 1 otherwise, 2 on bad flags.',
+        '',
+        'Score: 0 to 100. Each blocking failure (buyers cannot pay, or get the route free) costs 40, any other failure 15,',
+        'a warning 5. A route that does not answer 402 scores 0; a run that never reached the 402 scores at most 50.',
+        'With --min-score <n>, the score alone sets the exit code: 1 when it is below n, else 0.',
+        '',
+        'CI: --ci prints plain, stable text, never prompts and never pays (--pay is refused). When GITHUB_ACTIONS is set',
+        'it adds ::error / ::warning annotations for failed and warning checks, and a summary to GITHUB_STEP_SUMMARY.',
         '',
         'Free quotas: when the unpaid request is served (2xx) with RateLimit-Remaining, the route has a free quota. sell',
         'check reports it (limit, remaining, reset) and sends RateLimit-Remaining + 1 more unpaid requests to use it up and',
@@ -58,6 +73,7 @@ export function registerSell(program: Command): void {
         "  radius-cli sell check http://127.0.0.1:3000/api/report --price '$0.001' --probe-head",
         '  radius-cli sell check https://api.example.com/query -X POST -d \'{"q":1}\' --facilitator https://facilitator.example',
         "  radius-cli sell check --pricing pricing.md --base-url http://localhost:8788 --param address=0x… --param hash=0x…",
+        '  radius-cli sell check https://api.example.com/r --ci --min-score 80   # in a CI job',
         '  RADIUS_HOME=.radius radius-cli sell check https://api.example.com/r --pay --threshold 0.01   # one testnet payment',
         '  RADIUS_HOME=.radius radius-cli --password-file .radius/pw sell check https://api.example.com/r --pay --threshold 0.01',
       ].join('\n'),
@@ -77,6 +93,10 @@ export function registerSell(program: Command): void {
     .option('--threshold <decimal>', "with --pay: most to pay, in the asset's display units (required)")
     .option('--networks <list>', `with --pay: networks to pay on (${PAY_NETWORKS.join(', ')}; default radius)`)
     .option('--timeout <ms>', 'timeout for each request, in milliseconds', '15000')
+    .option('--min-score <n>', 'exit 1 when the score (0 to 100) is below n; with it, the score alone sets the exit code')
+    .option('--ci', 'for CI: plain, stable output; never prompts or pays; GitHub Actions annotations when GITHUB_ACTIONS is set')
+    .option('--openapi <url|file>', "OpenAPI document for the discovery check (default: /openapi.json on the route's origin)")
+    .option('--no-openapi', 'skip the OpenAPI discovery check')
     .action(async (url: string | undefined, sub: CheckOptions, cmd: Command) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       process.exit(await runCheck(url, sub, opts));
@@ -118,6 +138,12 @@ async function runCheck(url: string | undefined, sub: CheckOptions, opts: Global
   }
   const verb = (sub.method ?? 'get').toLowerCase();
   if (!isSupportedVerb(verb)) return usage(`unsupported method '${sub.method}' (use one of ${SUPPORTED_VERBS.join(', ')})`);
+  let minScore: number | undefined;
+  if (sub.minScore !== undefined) {
+    minScore = Number(sub.minScore);
+    if (!/^\d+$/.test(sub.minScore) || minScore > 100) return usage(`--min-score must be an integer from 0 to 100 (got '${sub.minScore}')`);
+  }
+  if (sub.ci && sub.pay) return usage('--pay does not apply with --ci: CI runs never pay');
   if (sub.threshold !== undefined && !sub.pay) return usage('--threshold only applies with --pay');
   if (sub.pay && sub.threshold === undefined) return usage('--pay needs --threshold <decimal>, the most to pay');
   if (sub.threshold !== undefined) {
@@ -171,7 +197,22 @@ async function runCheck(url: string | undefined, sub: CheckOptions, opts: Global
     pay = { networks: payNetworks, signer: await deferredAccount(cfg, opts.privateKey), threshold: sub.threshold! };
   }
 
-  const shared = {
+  // Commander gives false for --no-openapi, a string for --openapi <url|file>, and undefined (or true) for neither.
+  let openapi: SellCheckOptions['openapi'];
+  if (sub.openapi === false) openapi = false;
+  else if (typeof sub.openapi === 'string' && !/^https?:\/\//i.test(sub.openapi)) {
+    try {
+      openapi = { source: sub.openapi, document: JSON.parse(readFileSync(sub.openapi, 'utf8')) as unknown };
+    } catch (e) {
+      return usage(`--openapi ${sub.openapi}: ${(e as Error).message}`);
+    }
+  } else openapi = typeof sub.openapi === 'string' ? sub.openapi : undefined;
+
+  const github = sub.ci === true && process.env.GITHUB_ACTIONS === 'true';
+  const passes = (score: number, ok: boolean) => (minScore !== undefined ? score >= minScore : ok);
+  const shared: Omit<SellCheckOptions, 'url' | 'method' | 'price' | 'pay'> = {
+    openapi,
+    openapiCache: new Map() as OpenApiCache,
     headers,
     body,
     facilitators: sub.facilitator,
@@ -193,8 +234,13 @@ async function runCheck(url: string | undefined, sub: CheckOptions, opts: Global
     const { checkRoutes } = await import('../lib/sellCheckRoutes.js');
     const result = await checkRoutes(sub.pricing, routes, params, sub.baseUrl, shared, opts.json ? undefined : printRoute);
     if (opts.json) console.log(jsonStringify(result));
-    else printTotals(result);
-    return result.ok ? 0 : 1;
+    else printTotals(result, minScore);
+    if (github) {
+      const lines = result.routes.flatMap((r) => (r.report ? githubAnnotations(r.report.checks, `${r.method} ${r.url}`) : []));
+      emitAnnotations(lines, opts.json === true);
+      writeStepSummary(result.routes.flatMap((r) => (r.report ? [r.report] : [])), result.score, minScore);
+    }
+    return passes(result.score, result.ok) ? 0 : 1;
   }
 
   // Loaded on demand: the facilitator client and x402 decoder are only needed here.
@@ -202,8 +248,36 @@ async function runCheck(url: string | undefined, sub: CheckOptions, opts: Global
   const report = await checkSeller({ ...shared, url: url!, method: verb, price: sub.price, pay });
 
   if (opts.json) console.log(jsonStringify(report));
-  else printReport(report);
-  return report.ok ? 0 : 1;
+  else printReport(report, minScore);
+  if (github) {
+    emitAnnotations(githubAnnotations(report.checks, `${report.method} ${report.url}`), opts.json === true);
+    writeStepSummary([report], report.score, minScore);
+  }
+  return passes(report.score, report.ok) ? 0 : 1;
+}
+
+/** Workflow commands go to stdout, or to stderr when stdout carries --json (the runner reads both). */
+function emitAnnotations(lines: string[], json: boolean): void {
+  if (lines.length === 0) return;
+  (json ? process.stderr : process.stdout).write(`${lines.join('\n')}\n`);
+}
+
+/** A Markdown table of the checks, appended to the job summary GitHub Actions shows for the step. */
+function writeStepSummary(reports: SellCheckReport[], score: number, minScore: number | undefined): void {
+  const file = process.env.GITHUB_STEP_SUMMARY;
+  if (!file) return;
+  const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  const out = [`### radius-cli sell check: ${score}/100${minScore !== undefined ? ` (minimum ${minScore}: ${score >= minScore ? 'passed' : 'failed'})` : ''}`, ''];
+  for (const r of reports) {
+    out.push(`**${cell(`${r.method} ${r.url}`)}**: ${r.score}/100`, '', '| Result | Points | Check | Detail |', '| --- | --- | --- | --- |');
+    for (const c of r.checks) out.push(`| ${c.status} | ${c.deduction ? `-${c.deduction}` : ''} | ${cell(c.id)} | ${cell(c.message)} |`);
+    out.push('');
+  }
+  try {
+    appendFileSync(file, `${out.join('\n')}\n`);
+  } catch {
+    /* the summary is a convenience; the annotations and exit code carry the result */
+  }
 }
 
 /** A pricing.md from an http(s) URL or a local file. */
@@ -222,18 +296,25 @@ function counts(s: Record<CheckStatus, number>): string {
   return `${s.pass} passed, ${s.warn} warning${s.warn === 1 ? '' : 's'}, ${s.fail} failed${s.skip ? `, ${s.skip} skipped` : ''}`;
 }
 
-function reportLines(report: SellCheckReport): string[] {
+/** `score: 85/100`, and the --min-score verdict when one was asked for. */
+function scoreLine(score: number, minScore: number | undefined): string {
+  return `score: ${score}/100${minScore === undefined ? '' : ` (minimum ${minScore}: ${score >= minScore ? 'passed' : 'FAILED'})`}`;
+}
+
+function reportLines(report: SellCheckReport, minScore?: number): string[] {
   const out: string[] = [`${report.method} ${report.url}`];
   for (const o of report.offers) {
     out.push(`  offer ${o.index}: ${o.scheme}/${o.transferMethod ?? '?'} ${o.amountFormatted ?? o.amount} on ${o.networkName ?? o.network} to ${o.payTo}`);
   }
-  for (const c of report.checks as Check[]) out.push(`  ${MARK[c.status]}  ${c.id}: ${c.message}`);
+  // A table: result, points the check cost, check id, detail.
+  for (const c of report.checks as Check[]) out.push(`  ${MARK[c.status]}  ${(c.deduction ? `-${c.deduction}` : '').padStart(3)}  ${c.id}: ${c.message}`);
   out.push(counts(report.summary));
+  out.push(scoreLine(report.score, minScore));
   return out;
 }
 
-function printReport(report: SellCheckReport): void {
-  process.stdout.write(`${reportLines(report).join('\n')}\n`);
+function printReport(report: SellCheckReport, minScore: number | undefined): void {
+  process.stdout.write(`${reportLines(report, minScore).join('\n')}\n`);
 }
 
 function printRoute(r: RouteResult): void {
@@ -243,18 +324,20 @@ function printRoute(r: RouteResult): void {
     process.stdout.write(`${head}\n  skip  ${r.skipped}\n\n`);
     return;
   }
-  const verdict = r.report.ok ? 'ok' : 'FAIL';
+  const verdict = `${r.report.ok ? 'ok' : 'FAIL'}, ${r.report.score}/100`;
   process.stdout.write(`${head}: ${verdict}\n${reportLines(r.report).map((l) => `  ${l}`).join('\n')}\n\n`);
 }
 
-function printTotals(result: RoutesReport): void {
+function printTotals(result: RoutesReport, minScore: number | undefined): void {
   const r = result.summary.routes;
   const out = [`${r.checked + r.skipped} route${r.checked + r.skipped === 1 ? '' : 's'}: ${r.passed} passed, ${r.failed} failed, ${r.skipped} skipped`];
   for (const x of result.routes) {
     const unchecked = x.report?.freeQuota && !x.report.freeQuota.exhausted ? ': free quota not used up, 402 not checked' : '';
-    out.push(`  ${x.report ? (x.report.ok ? 'ok  ' : 'FAIL') : 'skip'}  ${x.method} ${x.path}${x.url ? ` (${x.url})` : ''}${x.skipped ? `: ${x.skipped}` : unchecked}`);
+    const points = x.report ? `${String(x.report.score).padStart(3)}/100` : '       ';
+    out.push(`  ${x.report ? (x.report.ok ? 'ok  ' : 'FAIL') : 'skip'}  ${points}  ${x.method} ${x.path}${x.url ? ` (${x.url})` : ''}${x.skipped ? `: ${x.skipped}` : unchecked}`);
   }
   out.push(`checks: ${counts(result.summary.checks)}`);
   if (r.checked === 0) out.push('no route was checked');
+  out.push(`${scoreLine(result.score, minScore)}${r.checked > 0 ? ' (the lowest route score)' : ''}`);
   process.stdout.write(`${out.join('\n')}\n`);
 }
