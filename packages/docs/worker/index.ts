@@ -7,7 +7,7 @@
 //   and Analytics Engine. Scripts, styles and images stay asset-first. Agent requests first pass the
 //   Radius Platform policy of RADIUS_PROJECT_ID, which allows, denies, rate-limits or charges them.
 import { Hono } from 'hono';
-import { createHandle, radiusPolicy, syncPolicy, type RadiusEnv } from '@radiustech/platform-sdk';
+import { createHandle, radiusPolicy, syncPolicy, syncPricingMd, type RadiusEnv } from '@radiustech/platform-sdk';
 import { radiusTestnet } from 'radius-sdk';
 
 // Counts the policy's free quotas and rate limits, and claims payments so one isn't used twice.
@@ -94,13 +94,12 @@ function varyOnAccept(res: Response): Response {
   return varied;
 }
 
-// Verified bots (Cloudflare's `cf.verifiedBotCategory`) that pass the policy untouched: search
-// engines, so the docs stay indexed, and link unfurls, uptime checks and webhooks. AI crawlers,
-// AI search, AI assistants and SEO tools are gated like any other agent.
-const UNGATED_BOTS = new Set(['Search Engine Crawler', 'Page Preview', 'Monitoring & Analytics', 'Webhooks']);
-
-// Enforces the project's policy, synced from the platform into RADIUS_POLICY by the cron trigger.
-const radius = createHandle<Env['Bindings']>();
+// Enforces the project's policy, synced from the platform into RADIUS_POLICY by the cron trigger. It
+// reads the request's `cf.verifiedBotCategory` itself, so the policy decides what verified bots
+// (search engines, link previews, monitors, webhooks, AI crawlers) get. `pricingMd` serves the
+// project's published catalog at `/pricing.md` (an agent request, before the policy: never charged),
+// synced into RADIUS_POLICY by the cron trigger below.
+const radius = createHandle<Env['Bindings']>({ pricingMd: true });
 
 // Serves pages and agent files, records the requests agents make, and gates agents with the policy.
 //
@@ -120,8 +119,7 @@ async function serveSite(request: Request, env: Env['Bindings'], ctx: ExecutionC
   const isPage = PAGE.test(url.pathname);
   const fromAgent =
     !request.headers.has('sec-fetch-mode') || (isPage && prefersMarkdown(request.headers.get('accept')));
-  const gated = fromAgent && !UNGATED_BOTS.has(String(request.cf?.verifiedBotCategory ?? ''));
-  const res = gated
+  const res = fromAgent
     ? await radius(request, env, (forwarded) => serveStatic(forwarded, env), ctx)
     : await serveStatic(request, env);
   if ((isPage || AGENT_FILE.test(url.pathname)) && fromAgent) record(request, res, env);
@@ -281,10 +279,14 @@ export default {
     if (new URL(request.url).pathname.startsWith('/api/try/')) return app.fetch(request, env, ctx);
     return serveSite(request, env, ctx);
   },
-  // The cron in wrangler.jsonc: copies the project's policy into RADIUS_POLICY when it changed. Without the
-  // RADIUS_API_KEY secret there is nothing to sync, and agent requests stay ungated.
+  // The cron in wrangler.jsonc: copies the project's policy and its published pricing.md into RADIUS_POLICY
+  // when they changed, each sync failing on its own. Without the RADIUS_API_KEY secret there is nothing to
+  // sync, and agent requests stay ungated.
   scheduled(_controller, env, ctx) {
     if (!env.RADIUS_API_KEY) return;
     ctx.waitUntil(syncPolicy(env).catch((error: unknown) => console.error('radius: policy sync failed:', error)));
+    ctx.waitUntil(
+      syncPricingMd(env).catch((error: unknown) => console.error('radius: pricing.md sync failed:', error)),
+    );
   },
 } satisfies ExportedHandler<Env['Bindings']>;

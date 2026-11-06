@@ -27,7 +27,7 @@
     "typecheck:docs": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json && tsc --noEmit -p worker/tsconfig.json"
   },
   "dependencies": {
-    "@radiustech/platform-sdk": "^0.1.0",
+    "@radiustech/platform-sdk": "^0.2.0",
     "@x402/core": "2.29.0",
     "@x402/evm": "2.29.0",
     "hono": "^4.13.7",
