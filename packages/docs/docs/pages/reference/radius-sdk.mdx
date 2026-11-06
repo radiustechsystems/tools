@@ -189,7 +189,7 @@ const payFetch = createRadiusFetch({ network: 'testnet', signer: process.env.RAD
 | `onPaymentRequired`  | `(offer) => boolean \| Promise<boolean>`     | —                  | Approve or decline an [offer](#offers) before signing                                                                                                                        |
 | `permit2Approval`    | `'auto'` or `'never'`                        | `'auto'`           | Without gas sponsoring, `'auto'` sends one unlimited Permit2 approval; `'never'` throws `approval_required`, also for a sponsored raw approve (`erc20ApprovalGasSponsoring`) |
 | `onApprovalRequired` | `(request) => boolean \| Promise<boolean>`   | —                  | Approve or decline any allowance change this client makes; see [approval requests](#approval-requests)                                                                       |
-| `onPaid`             | `(receipt, offer) => void`                   | —                  | Called after each paid response                                                                                                                                              |
+| `onPaid`             | `(receipt, offer) => void`                   | —                  | Called after each paid response with the [receipt](#receipts), checked against the offer                                                                                     |
 | `fetch`              | `typeof fetch`                               | `globalThis.fetch` | Underlying fetch                                                                                                                                                             |
 
 It also accepts the [network overrides](#networks); with `networks`, they apply to the first network.
@@ -240,22 +240,23 @@ Payment rules:
 
 The returned function also has these members. The wallet helpers act on the first network; `on(network)` returns them for another one.
 
-| Member                     | Returns                                                                                   |
-| -------------------------- | ----------------------------------------------------------------------------------------- |
-| `address`, `network`       | Signer address and the first resolved network                                             |
-| `networks`                 | Every network this client pays on, in preference order                                    |
-| `on(network)`              | The helpers below for one of `networks`, by preset ID, CAIP-2 ID, or `PaymentNetwork`     |
-| `maxPerRequest`            | The cap in base units                                                                     |
-| `balance()`                | `{ atomic, formatted }`: the signer's balance of the payment asset                        |
-| `balances()`               | Native {NATIVE_TOKEN} and {STABLECOIN} separately; see [Balances](#balances)              |
-| `send(to, amount)`         | Transfers the payment asset; needs a key or local account                                 |
-| `allowance(spender)`       | The payment-asset allowance granted to `spender`, in base units                           |
-| `approve(spender, amount)` | Approves `spender` for `amount` of the payment asset; goes through `onApprovalRequired`   |
-| `permit2Allowance()`       | The current Permit2 allowance                                                             |
-| `approvePermit2()`         | Sends the unlimited Permit2 approval now; goes through `onApprovalRequired`               |
-| `getSettlement(txHash)`    | A [settlement](#settlements), or `undefined` while the node does not know the transaction |
-| `fund()`                   | Requests a faucet drip for this wallet (Radius networks)                                  |
-| `client`                   | The underlying `@x402/core` client                                                        |
+| Member                             | Returns                                                                                                                                 |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `address`, `network`               | Signer address and the first resolved network                                                                                           |
+| `networks`                         | Every network this client pays on, in preference order                                                                                  |
+| `on(network)`                      | The helpers below for one of `networks`, by preset ID, CAIP-2 ID, or `PaymentNetwork`                                                   |
+| `maxPerRequest`                    | The cap in base units                                                                                                                   |
+| `balance()`                        | `{ atomic, formatted }`: the signer's balance of the payment asset                                                                      |
+| `balances()`                       | Native {NATIVE_TOKEN} and {STABLECOIN} separately; see [Balances](#balances)                                                            |
+| `send(to, amount)`                 | Transfers the payment asset; needs a key or local account                                                                               |
+| `allowance(spender)`               | The payment-asset allowance granted to `spender`, in base units                                                                         |
+| `approve(spender, amount)`         | Approves `spender` for `amount` of the payment asset; goes through `onApprovalRequired`                                                 |
+| `permit2Allowance()`               | The current Permit2 allowance                                                                                                           |
+| `approvePermit2()`                 | Sends the unlimited Permit2 approval now; goes through `onApprovalRequired`                                                             |
+| `getSettlement(txHash)`            | A [settlement](#settlements), or `undefined` while the node does not know the transaction                                               |
+| `reconcilePayment(receipt, offer)` | A [reconciliation](#reconcile-a-receipt) of the receipt against the chain, with this wallet as the payer; on the returned function only |
+| `fund()`                           | Requests a faucet drip for this wallet (Radius networks)                                                                                |
+| `client`                           | The underlying `@x402/core` client                                                                                                      |
 
 Members that send a transaction return a `TxResult`: `hash`, `status` (`'success'` or `'reverted'` from the receipt), and `explorerUrl`.
 
@@ -263,19 +264,78 @@ Members that send a transaction return a `TxResult`: `hash`, `status` (`'success
 
 `getPaymentReceipt(response, network)` decodes a `PAYMENT-RESPONSE` (x402) or `Payment-Receipt` (MPP) header and returns `undefined` when there is none. With `settle: 'before'`, `radiusPayments` exposes the receipt as the web-standard handler's second argument or Hono's `c.get('radiusPayment')`.
 
-| Field                         | Description                                                                                                                          |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `success`                     | Whether settlement succeeded                                                                                                         |
-| `protocol`                    | `'x402'` or `'mpp'`                                                                                                                  |
-| `transaction`                 | Settlement transaction hash                                                                                                          |
-| `payer`, `network`            | Paying address and CAIP-2 network                                                                                                    |
-| `amount`                      | Base units charged; for `upto` it can be less than the offer. `getPaymentReceipt` reports it only when the facilitator does (`upto`) |
-| `explorerUrl`                 | Explorer link for the transaction                                                                                                    |
-| `errorReason`, `errorMessage` | Set when settlement failed                                                                                                           |
+A receipt is what the server or facilitator reports. Decoding it does not prove that settlement happened; to check the chain, [reconcile the receipt](#reconcile-a-receipt).
+
+| Field                         | Description                                                                                                                                                                   |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `success`                     | Whether the server reports a successful settlement                                                                                                                            |
+| `protocol`                    | `'x402'` or `'mpp'`                                                                                                                                                           |
+| `transaction`                 | Settlement transaction hash; none for a zero `upto` charge                                                                                                                    |
+| `payer`, `network`            | Paying address and CAIP-2 network                                                                                                                                             |
+| `amount`                      | Base units charged, as reported. For `exact`, the price. For `upto`, the reported charge, which can be less than the offer; unset when the server did not report it           |
+| `asset`, `decimals`           | The offer's token and its decimals. radius-sdk adds these; they are not in the protocol header                                                                                |
+| `charge`                      | `{ scheme, authorized, reported, evidence }`: the authorized maximum and the reported charge, kept apart. Set by `createRadiusFetch`, `validatePaymentReceipt` and the server |
+| `explorerUrl`                 | Explorer link for the transaction                                                                                                                                             |
+| `errorReason`, `errorMessage` | Set when settlement failed                                                                                                                                                    |
+
+`charge.evidence` says how much the receipt tells you about the charge. Treat a value not listed here as unverified, because later releases can add values:
+
+| `evidence`   | Meaning                                                                                                                                        |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `implied`    | `exact`: the server reports success, and the scheme fixes the charge at the price                                                              |
+| `reported`   | The server reports the charge in `charge.reported`                                                                                             |
+| `zero`       | `upto`: the server reports a zero charge, so there is no settlement transaction                                                                |
+| `incomplete` | `upto`: the server reports success but not the charge. Anything from zero to `charge.authorized` can have moved; reconcile to learn the amount |
+| `failed`     | The server reports that settlement failed                                                                                                      |
+
+### Receipt validation
+
+`createRadiusFetch` checks each x402 receipt against the offer it paid before calling `onPaid`. `validatePaymentReceipt(receipt, { scheme, amount, network, asset, payer })` runs the same checks on a receipt you decode yourself. A successful receipt throws `invalid_receipt` when:
+
+- it names another network than the offer, so a Radius receipt cannot satisfy a Base offer;
+- it names another payer than the signer;
+- its transaction is not a 32-byte hex hash, or a non-zero charge names no transaction;
+- its amount is malformed, differs from an `exact` price, or exceeds the `upto` maximum.
+
+The error's `details` has `reason` (for example `network_mismatch`), the decoded `receipt`, and, from `createRadiusFetch`, the unread `response`. A successful `upto` receipt without an amount is not an error, and it is not read as the maximum: `amount` stays unset and `charge.evidence` is `incomplete`.
 
 ## Settlements
 
 `getSettlement(radiusTestnet, txHash)` (any `PaymentNetwork`) from `radius-sdk/client`, or `payFetch.getSettlement(txHash)`, reads a settlement transaction from the chain. The result has `status`, `blockNumber`, `transfers` (each `{ from, to, amount }` in the payment asset), `paid(to?)`, `paidFormatted(to?)`, and `explorerUrl`. Use `paid(to)` for what a recipient received: `transfers` lists every payment-asset transfer in the transaction, which can include the facilitator's fee conversion.
+
+### Reconcile a receipt
+
+`reconcilePayment(receipt, offer)` from `radius-sdk/client`, or `payFetch.reconcilePayment(receipt, offer)`, checks a receipt against the chain of `offer.network`. It looks for the offer's token moving from the payer to `offer.payTo` in the receipt's transaction, and compares that amount with the price (`exact`), or with the maximum and the reported charge (`upto`). Pass `{ payer, client }` as a third argument to name the payer or reuse a viem client; the payer defaults to the receipt's `payer`, and on `payFetch` to the wallet.
+
+The result keeps three amounts apart, in base units: `authorized` (the offer amount), `reported` (the receipt's charge), and `confirmed` (what the chain shows). An `incomplete` `upto` receipt is resolved here: `confirmed` is the amount that moved. `status` is one of these values; treat a value not listed here as not confirmed:
+
+| `status`     | Meaning                                                                                                                                                                     |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `confirmed`  | The chain shows the expected transfer, for an amount the offer and the receipt allow                                                                                        |
+| `no_charge`  | The receipt reports a zero `upto` charge with no transaction; nothing to read                                                                                               |
+| `mismatch`   | The evidence contradicts the offer or receipt; `reason` is `network_mismatch`, `asset_mismatch`, `payer_mismatch`, `recipient_mismatch`, `no_transfer`, or an amount reason |
+| `reverted`   | The settlement transaction reverted                                                                                                                                         |
+| `unresolved` | The evidence is not available: no transaction, a transaction the node does not know yet, or an RPC failure. This does not mean the payment failed; check again later        |
+
+```typescript
+import { createRadiusFetch, type PaymentOffer, type PaymentReceipt } from 'radius-sdk/client';
+
+const paid: { receipt: PaymentReceipt; offer: PaymentOffer }[] = [];
+const payFetch = createRadiusFetch({
+  signer: process.env.BUYER_KEY as `0x${string}`,
+  network: 'testnet',
+  maxPerRequest: '0.01',
+  onPaid: (receipt, offer) => {
+    paid.push({ receipt, offer });
+  },
+});
+
+await payFetch('https://api.example.com/data');
+for (const { receipt, offer } of paid) {
+  const result = await payFetch.reconcilePayment(receipt, offer);
+  console.log(result.status, result.authorized, result.reported, result.confirmed);
+}
+```
 
 ## Balances
 
@@ -401,23 +461,23 @@ The SDK's web-standard and Hono handlers return `502` with `error: 'facilitator_
 
 Payment failures throw `RadiusPaymentError` with a `code` and, for some codes, `details`:
 
-| Code                          | Cause                                                                                                         |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `price_above_limit`           | Every compatible offer is above `maxPerRequest`                                                               |
-| `insufficient_balance`        | The server accepts several of your networks and the wallet's balance covers the price on none                 |
-| `declined`                    | `onPaymentRequired` or `onApprovalRequired` returned `false`                                                  |
-| `network_mismatch`            | The server's offers are on networks this client does not pay on                                               |
-| `asset_mismatch`              | The server's offers are in another token                                                                      |
-| `no_compatible_offer`         | No offer uses a scheme or MPP method this client pays                                                         |
-| `unsupported_transfer_method` | The server needs a transfer method other than `permit2` or `eip3009`                                          |
-| `invalid_challenge`           | The 402 could not be parsed; `details.response` holds the response                                            |
-| `payment_rejected`            | The paid retry got another 402; `details.response` holds the response and `details.error` the server's reason |
-| `invalid_receipt`             | An `upto` payment response is invalid, for example it charges more than the signed maximum                    |
-| `redirect_refused`            | No longer raised: a redirect on the paid request is followed without the payment header                       |
-| `approval_required`           | A Permit2 approval is needed and `permit2Approval` is `'never'`                                               |
-| `approval_failed`             | The approval transaction reverted                                                                             |
-| `faucet`                      | `fund()` failed                                                                                               |
-| `config`                      | The options are invalid, for example a missing `maxPerRequest`                                                |
+| Code                          | Cause                                                                                                                                                 |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `price_above_limit`           | Every compatible offer is above `maxPerRequest`                                                                                                       |
+| `insufficient_balance`        | The server accepts several of your networks and the wallet's balance covers the price on none                                                         |
+| `declined`                    | `onPaymentRequired` or `onApprovalRequired` returned `false`                                                                                          |
+| `network_mismatch`            | The server's offers are on networks this client does not pay on                                                                                       |
+| `asset_mismatch`              | The server's offers are in another token                                                                                                              |
+| `no_compatible_offer`         | No offer uses a scheme or MPP method this client pays                                                                                                 |
+| `unsupported_transfer_method` | The server needs a transfer method other than `permit2` or `eip3009`                                                                                  |
+| `invalid_challenge`           | The 402 could not be parsed; `details.response` holds the response                                                                                    |
+| `payment_rejected`            | The paid retry got another 402; `details.response` holds the response and `details.error` the server's reason                                         |
+| `invalid_receipt`             | The payment response does not match the offer, for example another network, or more than the signed maximum; `details.reason` says which check failed |
+| `redirect_refused`            | No longer raised: a redirect on the paid request is followed without the payment header                                                               |
+| `approval_required`           | A Permit2 approval is needed and `permit2Approval` is `'never'`                                                                                       |
+| `approval_failed`             | The approval transaction reverted                                                                                                                     |
+| `faucet`                      | `fund()` failed                                                                                                                                       |
+| `config`                      | The options are invalid, for example a missing `maxPerRequest`                                                                                        |
 
 ## Networks
 

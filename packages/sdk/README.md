@@ -258,8 +258,18 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   402 names), plus x402 v1 `exact` (EIP-3009, challenge in the JSON body, payment in `X-PAYMENT`).
   The offer passed to `onPaymentRequired` says which (`offer.scheme`, `offer.x402Version`). For
   `upto`, `offer.amount` and `maxPerRequest` are about the authorised maximum; the receipt carries
-  the amount actually charged, which is validated against the signed maximum (`invalid_receipt`
-  otherwise). The Radius facilitator does not advertise `upto` yet, so it is unit-tested only.
+  the amount the facilitator reports it charged, which must not exceed the signed maximum
+  (`invalid_receipt` otherwise). A successful `upto` receipt without an amount leaves `amount`
+  unset (`receipt.charge.evidence: 'incomplete'`) instead of assuming the maximum. The Radius
+  facilitator does not advertise `upto` yet, so it is unit-tested only.
+- Receipts are checked against the offer before `onPaid`: network (a Radius receipt cannot satisfy
+  a Base offer), payer, transaction format and the scheme's amount rules; a mismatch throws
+  `invalid_receipt` with `details.reason` and the unread `details.response`. `receipt.charge`
+  separates the authorised maximum (`authorized`) from the reported charge (`reported`), and
+  `receipt.asset` / `receipt.decimals` name the token. A receipt is the server's report, not proof:
+  `payFetch.reconcilePayment(receipt, offer)` (or `reconcilePayment` from `radius-sdk/client`)
+  checks the token, payer, recipient and amount on chain and returns `confirmed`, `no_charge`,
+  `mismatch`, `reverted`, or `unresolved` when the evidence is not available yet.
 - Redirects: `fetch` follows them before the 402 (its limit of 20) and the request is paid at the final URL
   (`response.url`), with the price cap and `onPaymentRequired` applied to that offer. For GET and HEAD that
   is all there is to it. POST and other methods are where x402 clients diverge (`@x402/fetch` and
