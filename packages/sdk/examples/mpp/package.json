@@ -1,0 +1,23 @@
+{
+  "name": "radius-mpp-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "demo": "node --experimental-strip-types src/demo.ts",
+    "seller": "node --experimental-strip-types src/seller.ts",
+    "buy": "node --experimental-strip-types src/buyer.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "@x402/core": "2.29.0",
+    "@x402/evm": "2.29.0",
+    "hono": "^4.13.7",
+    "radius-sdk": "workspace:*",
+    "viem": "^2.48.11"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
