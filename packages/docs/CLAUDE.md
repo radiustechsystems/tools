@@ -127,7 +127,7 @@ packages/docs/
 │   └── remark-llm-output.ts      # Output-only remark plugin for agent Markdown
 ├── worker/index.ts               # Worker entry: /api/try/* ("Try Radius"), Markdown negotiation, agent logging, Radius Platform policy
 ├── public/                       # Static assets (logos, robots.txt, _redirects, _headers, generated skills/sitemap/feed)
-│   └── .well-known/agent-skills/ # Generated index.json (Agent Skills Discovery, sha256 of each SKILL.md); gitignored
+│   └── .well-known/agent-skills/ # Generated: Agent Skills Discovery index.json and a copy of each skill; gitignored
 ├── release-notes/network.md      # Radius Network release notes, by hand (see Release notes)
 ├── scripts/                      # Build utilities (skills, sitemap, release notes, tx cost, postbuild mirror, validators)
 ├── vocs.config.ts                # Site configuration
@@ -178,7 +178,9 @@ The `docs.radiustech.xyz` custom domain is managed in the Cloudflare dashboard, 
 
 ## Agent skills index
 
-`scripts/generate-skills-md.ts` (run by `prebuild` and `pnpm test:skills`) writes `public/skills/<name>.md` and `public/.well-known/agent-skills/index.json`, served at `/.well-known/agent-skills/index.json`. The index follows the Agent Skills Discovery RFC v0.2.0: one `skill-md` entry per skill in the marketplace plugins, its `url` the raw GitHub `main` URL of the SKILL.md and its `digest` the SHA-256 of that file as built. Both are gitignored; do not write the index by hand.
+`scripts/generate-skills-md.ts` (run by `prebuild` and `pnpm test:skills`) writes `public/skills/<name>.md` and `public/.well-known/agent-skills/`: the Agent Skills Discovery index (`index.json`, RFC v0.2.0) and, beside it, a copy of each skill in the marketplace plugins at `<name>/SKILL.md` with its references and scripts (not its evaluations). Each index entry is `skill-md`, its `url` the path-absolute `/.well-known/agent-skills/<name>/SKILL.md` and its `digest` the SHA-256 of that copy, so the index and the files it describes always come from the same build, on previews too. All of it is gitignored; do not write the index by hand. `public/_headers` adds CORS for the directory, and the Radius Platform policy leaves `/.well-known/*` unmatched, so agents fetch it free.
+
+The `radiustechsystems/.well-known` repo serves the same index on `radiustech.xyz` and `www.radiustech.xyz`, synced from this repo's `main` by its own workflow (`scripts/sync-skills.py` there). Its Worker has no route on `docs.radiustech.xyz`, so this build owns `/.well-known/` on the docs host. Skill changes reach `www` on the next sync and the docs host on the next docs deploy.
 
 ## Release notes
 

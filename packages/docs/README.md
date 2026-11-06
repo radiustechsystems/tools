@@ -1,6 +1,6 @@
 # Radius developer docs
 
-Source of [docs.radiustech.xyz](https://docs.radiustech.xyz), built with [Vocs](https://vocs.dev). The site imports `radius-sdk` from this workspace and publishes the skills in `plugins/radius/skills` at `/skills/<name>.md`, with an Agent Skills Discovery index of their SKILL.md files and SHA-256 digests at `/.well-known/agent-skills/index.json`, generated at build by `scripts/generate-skills-md.ts`.
+Source of [docs.radiustech.xyz](https://docs.radiustech.xyz), built with [Vocs](https://vocs.dev). The site imports `radius-sdk` from this workspace and publishes the skills in `plugins/radius/skills` at `/skills/<name>.md` and under `/.well-known/agent-skills/` (an Agent Skills Discovery index with SHA-256 digests, and each skill at `<name>/SKILL.md`), generated at build by `scripts/generate-skills-md.ts`. The `radiustechsystems/.well-known` repo mirrors the index on `radiustech.xyz`.
 
 ## Commands
 

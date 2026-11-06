@@ -17,10 +17,12 @@
  * Output lands in public/skills/<skill-name>.md so Vite serves
  * each as a static asset in dev and copies them to dist/public/ at build time.
  *
- * It also writes public/.well-known/agent-skills/index.json, the Agent Skills Discovery index
- * (v0.2.0, https://github.com/cloudflare/agent-skills-discovery-rfc): one `skill-md` entry per skill,
- * with the raw GitHub URL of its SKILL.md and the SHA-256 of that file's bytes, so the digests
- * always match the SKILL.md files the build read.
+ * It also writes the Agent Skills Discovery index (v0.2.0,
+ * https://github.com/cloudflare/agent-skills-discovery-rfc) to public/.well-known/agent-skills/index.json,
+ * with a copy of each skill beside it at public/.well-known/agent-skills/<name>/ (SKILL.md at the RFC's
+ * conventional location, plus the references and scripts it links to; evaluations stay out). Each
+ * `skill-md` entry points at that SKILL.md and carries the SHA-256 of its bytes, so a published index and
+ * the files it describes always come from the same build.
  *
  * Usage:
  *   npx tsx scripts/generate-skills-md.ts
@@ -35,8 +37,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join, dirname, relative, resolve, basename, sep } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, existsSync } from 'node:fs';
+import { join, dirname, relative, resolve, basename } from 'node:path';
 import { parse } from 'yaml';
 
 // ---------------------------------------------------------------------------
@@ -60,11 +62,10 @@ const SKILLS_OUTPUT_BASE = join(PUBLIC_DIR, 'skills');
 /** Canonical GitHub URL for the repo holding the skills */
 const SKILLS_REPO_URL = 'https://github.com/radiustechsystems/tools';
 
-/** Raw file base for the skills repo's main branch: index URLs point here. */
-const SKILLS_RAW_URL = 'https://raw.githubusercontent.com/radiustechsystems/tools/main';
-
-/** Agent Skills Discovery index, served at /.well-known/agent-skills/index.json */
-const AGENT_SKILLS_INDEX_PATH = join(PUBLIC_DIR, '.well-known', 'agent-skills', 'index.json');
+/** Agent Skills Discovery directory, served at /.well-known/agent-skills/ (the index and a SKILL.md per skill). */
+const AGENT_SKILLS_URL_PATH = '/.well-known/agent-skills';
+const AGENT_SKILLS_DIR = join(PUBLIC_DIR, ...AGENT_SKILLS_URL_PATH.split('/').filter(Boolean));
+const AGENT_SKILLS_INDEX_PATH = join(AGENT_SKILLS_DIR, 'index.json');
 
 /** Schema URI of the Agent Skills Discovery index format (RFC v0.2.0). */
 const AGENT_SKILLS_SCHEMA = 'https://schemas.agentskills.io/discovery/0.2.0/schema.json';
@@ -455,19 +456,39 @@ interface AgentSkillsIndexEntry {
   digest: string;
 }
 
+/** Skill subdirectories that are not part of the skill agents load. */
+const SKILL_DIRS_NOT_PUBLISHED = new Set(['evaluations']);
+
+/** Copy a directory tree, skipping the subdirectories in `SKILL_DIRS_NOT_PUBLISHED` at any depth. */
+function copySkillTree(from: string, to: string): void {
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from).sort()) {
+    const source = join(from, entry);
+    if (statSync(source).isDirectory()) {
+      if (!SKILL_DIRS_NOT_PUBLISHED.has(entry)) copySkillTree(source, join(to, entry));
+    } else {
+      writeFileSync(join(to, entry), readFileSync(source));
+    }
+  }
+}
+
 /**
- * Index entry for one skill: `url` is the raw GitHub URL of its SKILL.md (path relative to the repo
- * root, so it follows the marketplace plugin's `source`), `digest` the SHA-256 of that file's bytes.
+ * Publish a skill under public/.well-known/agent-skills/<name>/ (its SKILL.md with the reference files
+ * and scripts it links to, so relative links resolve) and build its index entry. `url` is path-absolute
+ * (the RFC resolves it against the index URL), so it points at this same build on every host, previews
+ * included; `digest` is the SHA-256 of the exact SKILL.md bytes copied.
  */
 function agentSkillsIndexEntry(skillName: string, skillRoot: string): AgentSkillsIndexEntry {
-  const skillMd = join(skillRoot, 'SKILL.md');
-  const repoPath = relative(SKILLS_SOURCE_DIR, skillMd).split(sep).join('/');
+  const copyDir = join(AGENT_SKILLS_DIR, skillName);
+  rmSync(copyDir, { recursive: true, force: true });
+  copySkillTree(skillRoot, copyDir);
+  const bytes = readFileSync(join(copyDir, 'SKILL.md'));
   return {
     name: skillName,
     type: 'skill-md',
     description: readSkillDescription(skillName, skillRoot),
-    url: `${SKILLS_RAW_URL}/${repoPath}`,
-    digest: `sha256:${createHash('sha256').update(readFileSync(skillMd)).digest('hex')}`,
+    url: `${AGENT_SKILLS_URL_PATH}/${skillName}/SKILL.md`,
+    digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
   };
 }
 
@@ -476,11 +497,15 @@ function writeAgentSkillsIndex(entries: AgentSkillsIndexEntry[]): void {
   const names = entries.map((entry) => entry.name);
   const duplicate = names.find((name, i) => names.indexOf(name) !== i);
   if (duplicate) throw new Error(`Skill ${duplicate} appears in more than one plugin`);
+  mkdirSync(AGENT_SKILLS_DIR, { recursive: true });
+  const stale = readdirSync(AGENT_SKILLS_DIR).filter((entry) => entry !== 'index.json' && !names.includes(entry));
+  for (const entry of stale) rmSync(join(AGENT_SKILLS_DIR, entry), { recursive: true, force: true });
   const skills = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   const index = { $schema: AGENT_SKILLS_SCHEMA, skills };
-  mkdirSync(dirname(AGENT_SKILLS_INDEX_PATH), { recursive: true });
   writeFileSync(AGENT_SKILLS_INDEX_PATH, JSON.stringify(index, null, 2) + '\n', 'utf-8');
-  console.log(`  ✓  .well-known/agent-skills/index.json (${skills.length} skill${skills.length !== 1 ? 's' : ''})`);
+  console.log(
+    `  ✓  .well-known/agent-skills/index.json (${skills.length} skill${skills.length !== 1 ? 's' : ''}, skills published beside it)`,
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { parse } from 'yaml';
@@ -60,7 +60,16 @@ test('flat references use local anchors; scripts and other skills keep source li
 const indexPath = join(docsRoot, 'public/.well-known/agent-skills/index.json');
 const marketplace = JSON.parse(readFileSync(join(repoRoot, '.claude-plugin/marketplace.json'), 'utf8'));
 
-test('agent-skills index lists every skill with the SHA-256 of its SKILL.md', () => {
+function listFiles(dir: string, skip: Set<string>, prefix = ''): string[] {
+  return readdirSync(dir)
+    .sort()
+    .flatMap((entry) => {
+      if (!statSync(join(dir, entry)).isDirectory()) return [`${prefix}${entry}`];
+      return skip.has(entry) ? [] : listFiles(join(dir, entry), skip, `${prefix}${entry}/`);
+    });
+}
+
+test('agent-skills index lists every skill, published beside it, with the SHA-256 of the served SKILL.md', () => {
   const raw = readFileSync(indexPath, 'utf8');
   assert.ok(raw.endsWith('}\n'), 'index ends with one trailing newline');
   const index = JSON.parse(raw);
@@ -73,7 +82,7 @@ test('agent-skills index lists every skill with the SHA-256 of its SKILL.md', ()
     const skillsDir = join(repoRoot, source, 'skills');
     for (const name of readdirSync(skillsDir).filter((d) => statSync(join(skillsDir, d)).isDirectory())) {
       expected.push(name);
-      sources.set(name, `${source.replace(/^\.\//, '')}/skills/${name}/SKILL.md`);
+      sources.set(name, `${source.replace(/^\.\//, '')}/skills/${name}`);
     }
   }
   const names = index.skills.map((skill: { name: string }) => skill.name);
@@ -83,19 +92,37 @@ test('agent-skills index lists every skill with the SHA-256 of its SKILL.md', ()
     assert.deepEqual(Object.keys(skill), ['name', 'type', 'description', 'url', 'digest']);
     assert.match(skill.name, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     assert.equal(skill.type, 'skill-md');
-    const path = sources.get(skill.name)!;
-    assert.equal(skill.url, `https://raw.githubusercontent.com/radiustechsystems/tools/main/${path}`);
-    const bytes = readFileSync(join(repoRoot, path));
-    assert.equal(skill.digest, `sha256:${createHash('sha256').update(bytes).digest('hex')}`);
+    assert.equal(skill.url, `/.well-known/agent-skills/${skill.name}/SKILL.md`);
+    const sourceDir = join(repoRoot, sources.get(skill.name)!);
+    const servedDir = join(docsRoot, 'public/.well-known/agent-skills', skill.name);
+    const files = listFiles(sourceDir, new Set(['evaluations']));
+    assert.ok(files.includes('SKILL.md'));
+    assert.deepEqual(
+      listFiles(servedDir, new Set()),
+      files,
+      `${skill.name}: the skill is published without its evaluations`,
+    );
+    for (const file of files) {
+      assert.ok(
+        readFileSync(join(servedDir, file)).equals(readFileSync(join(sourceDir, file))),
+        `${skill.name}/${file} is byte-identical`,
+      );
+    }
+    const served = readFileSync(join(servedDir, 'SKILL.md'));
+    assert.equal(skill.digest, `sha256:${createHash('sha256').update(served).digest('hex')}`);
     assert.match(skill.digest, /^sha256:[0-9a-f]{64}$/);
-    const description = frontmatter(bytes.toString('utf8')).description.replace(/\s+/g, ' ').trim();
+    const description = frontmatter(served.toString('utf8')).description.replace(/\s+/g, ' ').trim();
     assert.equal(skill.description, description);
     assert.ok(skill.description.length <= 1024);
   }
 });
 
-test('agent-skills index is byte-identical across runs', () => {
+test('agent-skills index is byte-identical across runs and drops skills that no longer exist', () => {
   const first = readFileSync(indexPath);
+  const staleDir = join(docsRoot, 'public/.well-known/agent-skills/removed-skill');
+  mkdirSync(staleDir, { recursive: true });
+  writeFileSync(join(staleDir, 'SKILL.md'), '---\nname: removed-skill\ndescription: stale\n---\n');
   generate();
   assert.ok(first.equals(readFileSync(indexPath)));
+  assert.ok(!existsSync(staleDir), 'a copy with no skill behind it is removed');
 });

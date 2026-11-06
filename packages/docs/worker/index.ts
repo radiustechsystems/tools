@@ -3,8 +3,8 @@
 // - /api/try/*: the backend for the interactive "Try Radius" components, a faucet proxy and a priced
 //   route (/api/try/hello) that the Radius Platform policy of RADIUS_PROJECT_ID charges for.
 // - Pages and agent-facing files (Markdown twins, llms.txt, skills and their discovery index, robots.txt,
-//   sitemaps): served from static assets, with Markdown for requests that prefer it, recording agent requests in Workers Logs
-//   and Analytics Engine. Scripts, styles and images stay asset-first. Agent requests first pass the
+//   sitemaps): served from static assets, with Markdown for requests that prefer it, recording agent
+//   requests in Workers Logs and Analytics Engine. Scripts, styles and images stay asset-first. Agent requests first pass the
 //   Radius Platform policy of RADIUS_PROJECT_ID, which allows, denies, rate-limits or charges them.
 import { Hono } from 'hono';
 import { createHandle, radiusPolicy, syncPolicy, syncPricingMd, type RadiusEnv } from '@radiustech/platform-sdk';
