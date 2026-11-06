@@ -1,6 +1,7 @@
 import { FacilitatorResponseError, getFacilitatorResponseError, type FacilitatorClient } from '@x402/core/server';
 import { decodePaymentRequiredHeader } from '@x402/core/http';
-import type { PaymentPayload, PaymentRequirements } from '@x402/core/types';
+import { SettleError, type PaymentPayload, type PaymentRequirements, type SettleResponse } from '@x402/core/types';
+import type { SettlementClassifier } from '../outcome.js';
 import { explorerTxUrl, type PaymentNetwork } from '../networks.js';
 import type { PaymentReceipt } from '../receipt.js';
 import {
@@ -33,12 +34,16 @@ export interface MppServerOptions {
 export interface MppHost {
   readonly networks: readonly PaymentNetwork[];
   facilitatorFor(network: PaymentNetwork): FacilitatorClient;
+  readonly classifySettlement: SettlementClassifier;
 }
 
-/** Outcome of an MPP credential check: settle-ready details, or the reason to answer 402 / 502. */
+/**
+ * Outcome of an MPP credential check: settle-ready details, or the reason to answer 402 / 502 / 503.
+ * A failed settle carries the facilitator's `settle` response, or the `error` when it gave none.
+ */
 export type MppVerification =
   | { ok: true; network: PaymentNetwork; requirements: PaymentRequirements; payload: PaymentPayload; payer: string }
-  | { ok: false; status: 402 | 502; reason: string };
+  | { ok: false; status: 402 | 502 | 503; reason: string; settle?: SettleResponse; error?: unknown };
 
 const PROBLEM_TYPE = 'https://paymentauth.org/problems/verification-failed';
 
@@ -195,7 +200,8 @@ export class MppPayments {
     try {
       const settled = await this.host.facilitatorFor(v.network).settle(v.payload, v.requirements);
       if (!settled.success || !settled.transaction) {
-        return { ok: false, status: 402, reason: settled.errorMessage ?? settled.errorReason ?? 'settlement failed' };
+        const reason = settled.errorMessage ?? settled.errorReason ?? 'settlement failed';
+        return { ok: false, status: this.failureStatus(settled), reason, settle: settled };
       }
       return {
         ok: true,
@@ -210,8 +216,18 @@ export class MppPayments {
         },
       };
     } catch (e) {
-      return facilitatorFailure(e);
+      if (e instanceof SettleError) {
+        const settle: SettleResponse = { success: false, errorReason: e.errorReason, errorMessage: e.errorMessage, transaction: e.transaction ?? '', network: e.network ?? v.network.network, payer: e.payer };
+        return { ok: false, status: this.failureStatus(settle), reason: e.message, settle };
+      }
+      return { ...facilitatorFailure(e), error: e };
     }
+  }
+
+  /** 503 for a pending settlement, 502 for an unknown one, else 402. */
+  private failureStatus(settle: SettleResponse): 402 | 502 | 503 {
+    const status = this.host.classifySettlement(settle);
+    return status === 'pending' ? 503 : status === 'unknown' ? 502 : 402;
   }
 
   /** `Payment-Receipt` header value for a settled payment. */

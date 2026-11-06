@@ -157,18 +157,30 @@ export interface PaymentReconciliation {
  * (`upto`). A successful `upto` receipt that omitted the charge is resolved here: `confirmed` is the
  * amount the chain shows.
  *
+ * A failure receipt that names a transaction (a pending settlement, or a failure reported after the
+ * transaction was broadcast) is checked the same way, as a claim to pay the offer: `confirmed` means
+ * the payment settled despite the report, `reverted` that it definitively did not, `unresolved` that
+ * the chain does not show it yet. For `exact`, `reported` is then the price; for `upto`, unset.
+ *
  * Never throws for missing evidence: a receipt without a transaction, a transaction the node does
  * not know yet, or an RPC failure yields `unresolved`, which is not proof that the payment failed.
  */
 export async function reconcilePayment(receipt: PaymentReceipt, offer: ReconcileOffer, options: ReconcileOptions = {}): Promise<PaymentReconciliation> {
   const authorized = BigInt(offer.amount);
   const reportedRaw = receipt.charge ? receipt.charge.reported : receipt.amount;
+  // A failure receipt that names a transaction (a pending settlement, or a failure the facilitator
+  // reports after broadcasting) is checked on chain like a success: the chain, not the report, decides.
+  const claimsTransaction = receipt.success || (typeof receipt.transaction === 'string' && receipt.transaction.length > 0);
   const reported =
-    offer.scheme === 'exact' && receipt.success ? authorized : reportedRaw !== undefined && /^[0-9]+$/.test(reportedRaw) ? BigInt(reportedRaw) : undefined;
+    offer.scheme === 'exact' && claimsTransaction
+      ? authorized
+      : receipt.success && reportedRaw !== undefined && /^[0-9]+$/.test(reportedRaw)
+        ? BigInt(reportedRaw)
+        : undefined;
   const base = { authorized, reported };
   const unresolved = (reason: ReconciliationReason, message: string, transaction?: `0x${string}`): PaymentReconciliation => ({ ...base, status: 'unresolved', reason, message, transaction });
 
-  if (!receipt.success) {
+  if (!claimsTransaction) {
     return { ...base, reported: undefined, status: 'unresolved', reason: 'receipt_failed', message: 'The receipt reports a failed settlement; there is no settlement to confirm' };
   }
   if (receipt.network !== offer.network.network && !offer.network.v1Names.includes(receipt.network)) {
