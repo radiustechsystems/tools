@@ -43,7 +43,7 @@ async function readBody(res: Response) {
   }
 }
 
-const [helloRoute, helloSpec] = Object.entries(TRY_ROUTES)[0];
+const [helloRoute] = Object.entries(TRY_ROUTES)[0];
 
 function TryPaidRequestCard() {
   const action = useAction();
@@ -114,8 +114,8 @@ function TryPaidRequestCard() {
   return (
     <TryCard title="Pay for an API request">
       <p>
-        Request <code>{helloRoute}</code> for {helloSpec.price}. After payment, the API returns{' '}
-        <code>{'{"message":"Hello, world!"}'}</code>.
+        Request <code>{helloRoute}</code>. The price comes from the API&apos;s policy on the Radius Platform and arrives
+        in the <code>402</code> response. After payment, the API returns <code>{'{"message":"Hello, world!"}'}</code>.
       </p>
       <div className="try-fields">
         <label>
@@ -212,8 +212,8 @@ export const TryPaidRequest = Object.assign(TryPaidRequestCard, {
       `import { createRadiusFetch, getPaymentReceipt } from 'radius-sdk/client';
 
 const payFetch = createRadiusFetch({ network: 'testnet', signer: process.env.RADIUS_PRIVATE_KEY, maxPerRequest: '0.01 SBC' });
-const res = await payFetch('https://docs.radiustech.xyz/api/try/hello'); // 0.001 SBC
+const res = await payFetch('https://docs.radiustech.xyz/api/try/hello'); // the price comes from the API's policy
 console.log(res.status, await res.json(), getPaymentReceipt(res, payFetch.network));
-// Set maxPerRequest to '0.0001 SBC' to see the client refuse before signing (price_above_limit).`,
+// Set maxPerRequest below the quoted price to see the client refuse before signing (price_above_limit).`,
     ),
 });

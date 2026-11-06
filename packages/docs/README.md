@@ -18,7 +18,7 @@ Run from `packages/docs` (Node 22.15+, pnpm). Build the SDK once first: `pnpm --
 | `pnpm docs:sitemap-check`  | After a build: validate `sitemap.xml`                                            |
 | `pnpm fetch-cost`          | Refresh the fee constants in `docs/constants.ts` (the deploy workflow does it)   |
 
-CI (`.github/workflows/docs.yml`) runs format, lint, typecheck, the validators and the build on every pull request that touches the docs, the SDK or the skills, and uploads a preview version of the Worker for same-repo pull requests.
+CI (`.github/workflows/docs.yml`) runs format, lint, typecheck, the validators and the build on every pull request that touches the docs, the SDK or the skills, and deploys a Worker Preview (`wrangler preview`) for same-repo pull requests.
 
 ## Hosting and releases
 

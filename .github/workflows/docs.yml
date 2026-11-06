@@ -3,10 +3,13 @@ name: Docs
 # Checks packages/docs on every pull request and push to main that can change the built site: the docs
 # themselves, the SDK they import, the skills they publish under /skills/, the changelogs the release
 # notes are built from, and the lockfile.
-# Same-repo pull requests also get a preview: a Worker version uploaded under the alias pr-<number>.
+# Same-repo pull requests also get a Worker Preview named pr-<number> (the "previews" block in
+# packages/docs/wrangler.jsonc), deleted when the pull request closes. Not a Version URL: Cloudflare
+# generates none for a Worker that implements a Durable Object, and this one implements RadiusCounter.
 # Production deploys are not done here; see docs-deploy.yml.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, closed]
     paths:
       - packages/docs/**
       - packages/sdk/**
@@ -38,6 +41,7 @@ defaults:
 
 jobs:
   check:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -141,23 +145,27 @@ jobs:
           name: docs-site
           path: packages/docs/dist/public
 
-      - name: Upload preview version
+      # Wrangler appends a {"type":"preview", "preview_urls": [...]} line to WRANGLER_OUTPUT_FILE_PATH; the
+      # human-readable summary, including any warning about missing Preview bindings, stays in the log.
+      - name: Create or update Preview
         id: upload
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          ALIAS: pr-${{ github.event.pull_request.number }}
+          NAME: pr-${{ github.event.pull_request.number }}
           SHA: ${{ github.event.pull_request.head.sha }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.json
         run: |
           set -o pipefail
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
             echo "::warning::No preview: the CLOUDFLARE_API_TOKEN secret is not set."
             exit 0
           fi
-          pnpm wrangler versions upload --preview-alias "$ALIAS" --tag "${SHA:0:7}" --message "PR preview $ALIAS" | tee upload.log
-          url=$(grep -oE "https://$ALIAS-[^ ]+\.workers\.dev" upload.log | head -1)
+          pnpm wrangler preview --name "$NAME" --tag "${SHA:0:7}" --message "PR preview $NAME"
+          url=$(jq -r 'select(.type == "preview") | .preview_urls[0] // empty' "$WRANGLER_OUTPUT_FILE_PATH" || true)
+          case "$url" in http*) ;; ?*) url="https://$url" ;; esac
           if [ -z "$url" ]; then
-            echo "::error::Uploaded, but found no preview URL in the wrangler output."
+            echo "::error::Deployed the Preview, but found no Preview URL in the wrangler output."
             exit 1
           fi
           echo "url=$url" >> "$GITHUB_OUTPUT"
@@ -178,3 +186,41 @@ jobs:
             const existing = comments.find((c) => c.body?.startsWith(marker));
             if (existing) await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
             else await github.rest.issues.createComment({ owner, repo, issue_number, body });
+
+  # Deletes the pull request's Preview and its Durable Object storage. Best effort: Cloudflare also deletes
+  # the least recently deployed Preview once a Worker reaches its Preview limit.
+  cleanup:
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Delete Preview
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          NAME: pr-${{ github.event.pull_request.number }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::warning::Preview not deleted: the CLOUDFLARE_API_TOKEN secret is not set."
+            exit 0
+          fi
+          pnpm wrangler preview delete --name "$NAME" --skip-confirmation ||
+            echo "::warning::Could not delete the Preview $NAME; it may never have been created."

@@ -79,9 +79,6 @@ describe('non-interactive keystore unlock', () => {
 });
 
 describe('sell check --pay without a terminal', () => {
-  class Exit extends Error {
-    constructor(readonly code: number) { super(`exit ${code}`); }
-  }
   const tty = process.stdin.isTTY;
   afterEach(() => {
     Object.defineProperty(process.stdin, 'isTTY', { value: tty, configurable: true });
@@ -98,11 +95,11 @@ describe('sell check --pay without a terminal', () => {
     registerSell(program);
     let stderr = '';
     vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { stderr += String(chunk); return true; });
-    vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Exit(code ?? 0); }) as never);
-    const code = await program.parseAsync(['node', 'radius-cli', 'sell', 'check', 'http://127.0.0.1:9/api/report', '--pay', '--threshold', '0.01']).then(
-      () => { throw new Error('did not exit'); },
-      (e: unknown) => { if (e instanceof Exit) return e.code; throw e; },
-    );
+    // The command sets process.exitCode rather than calling process.exit(), so piped stdout drains.
+    process.exitCode = undefined;
+    await program.parseAsync(['node', 'radius-cli', 'sell', 'check', 'http://127.0.0.1:9/api/report', '--pay', '--threshold', '0.01']);
+    const code = process.exitCode;
+    process.exitCode = undefined;
     expect(code).toBe(2);
     expect(stderr).toMatch(/sell check: the keystore at .* is password-protected and stdin is not a terminal: set RADIUS_PASSWORD or pass --password-file <path>/);
     expect(stderr).not.toContain(PASSWORD);

@@ -5,23 +5,20 @@ import { registerSell } from '../src/commands/sell.js';
 // `sell check` documents exit 2 for bad flags. Every case here fails before any request is made, so
 // the URL is never contacted.
 
-class Exit extends Error {
-  constructor(readonly code: number) { super(`exit ${code}`); }
-}
-
 async function run(...args: string[]): Promise<{ code: number; stderr: string }> {
   const program = new Command().option('--network <name>').option('--rpc-url <url>').option('--private-key <hex>').option('--password-file <path>').option('--sbc <address>').option('--rusd <address>').option('--json');
   registerSell(program);
   let stderr = '';
   const write = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { stderr += String(chunk); return true; });
-  const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Exit(code ?? 0); }) as never);
+  // The command sets process.exitCode rather than calling process.exit(), so piped stdout drains.
+  const exit = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('sell check called process.exit()'); }) as never);
+  process.exitCode = undefined;
   try {
     await program.parseAsync(['node', 'radius-cli', ...args]);
-    throw new Error('sell check did not exit');
-  } catch (e) {
-    if (e instanceof Exit) return { code: e.code, stderr };
-    throw e;
+    if (process.exitCode === undefined) throw new Error('sell check did not set an exit code');
+    return { code: Number(process.exitCode), stderr };
   } finally {
+    process.exitCode = undefined;
     write.mockRestore();
     exit.mockRestore();
   }

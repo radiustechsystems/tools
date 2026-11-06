@@ -1,6 +1,6 @@
 {
   "name": "radius-cli",
-  "version": "0.6.0",
+  "version": "0.7.1",
   "description": "CLI wallet for the Radius network \u2014 like cast, with a built-in account",
   "type": "module",
   "bin": {
@@ -46,8 +46,8 @@
   },
   "dependencies": {
     "@inquirer/prompts": "^7.0.0",
-    "@x402/core": "2.27.0",
-    "@x402/evm": "2.27.0",
+    "@x402/core": "2.29.0",
+    "@x402/evm": "2.29.0",
     "commander": "^12.1.0",
     "ethers": "^6.13.0",
     "radius-sdk": "workspace:^",

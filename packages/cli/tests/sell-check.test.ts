@@ -53,13 +53,17 @@ async function facilitator(kinds: [string, string][], extensions = ['eip2612GasS
   return state;
 }
 
-/** Serve a radius-sdk seller: `GET /api/report` paid, `GET /health` free. */
-async function seller(options: Partial<RadiusPaymentsOptions>, transform?: (res: Response) => Response | Promise<Response>) {
+/**
+ * Serve a radius-sdk seller: `GET /api/report` paid, `GET /health` free. `unpaidHead` answers HEAD
+ * before the payment middleware, like a router that dispatches HEAD to the GET handler.
+ */
+async function seller(options: Partial<RadiusPaymentsOptions>, transform?: (res: Response) => Response | Promise<Response>, unpaidHead = false) {
   const pay = radiusPayments({ network: 'testnet', payTo: PAY_TO, routes: { 'GET /api/report': { price: '$0.001', description: 'Report' } }, ...options } as RadiusPaymentsOptions);
   const app = pay.wrap((request) => (new URL(request.url).pathname === '/health' || new URL(request.url).pathname === '/api/report'
     ? Response.json({ report: 'quarterly-sales' })
     : new Response('not found', { status: 404 })));
   const server = createServer(async (req, res) => {
+    if (unpaidHead && req.method === 'HEAD') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(); return; }
     let response = await app(new Request(`http://${req.headers.host}${req.url}`, { method: req.method, headers: req.headers as Record<string, string> }));
     if (transform) response = await transform(response);
     res.writeHead(response.status, Object.fromEntries(response.headers));
@@ -317,9 +321,15 @@ describe('radius-cli sell check', () => {
 
   it('warns when an unpaid HEAD is served', async () => {
     const fac = await facilitator(radiusKinds);
-    const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } })}/api/report`, facilitators: [fac.url], probeHead: true });
+    const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } }, undefined, true)}/api/report`, facilitators: [fac.url], probeHead: true });
     expect(statusOf(report, 'head')).toBe('warn');
     expect(report.ok).toBe(true);
+  });
+
+  it('passes HEAD on a radius-sdk seller, which charges HEAD on a GET route', async () => {
+    const fac = await facilitator(radiusKinds);
+    const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } })}/api/report`, facilitators: [fac.url], probeHead: true });
+    expect(report.checks.find((c) => c.id === 'head')).toMatchObject({ status: 'pass', message: 'unpaid HEAD answered 402' });
   });
 
   it('--pay makes one payment within the threshold and checks the receipt', async () => {

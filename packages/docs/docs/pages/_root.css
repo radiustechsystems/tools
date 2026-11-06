@@ -581,3 +581,129 @@ footer a:focus-visible {
     gap: 0.125rem;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Site banner (`banner` in vocs.config.ts): Merchant Console call to action.
+ * Vocs fixes it above the top nav and offsets the layout by its height. Its
+ * content is text plus two links, styled here as a primary and a secondary button.
+ * ------------------------------------------------------------------------- */
+:root {
+  --radius-banner-bg: #1f1f25;
+  --radius-banner-fg: #f5f3f0;
+  --radius-banner-border: transparent;
+}
+
+:root[style*='color-scheme:dark'],
+:root[style*='color-scheme: dark'] {
+  --radius-banner-bg: #2d2c31;
+  --radius-banner-border: #3a3942;
+}
+
+[data-v-banner][data-v-context] {
+  padding: 0.5rem 3rem;
+  border-bottom: 1px solid var(--radius-banner-border);
+  background-color: var(--radius-banner-bg);
+  color: var(--radius-banner-fg);
+  font-weight: 500;
+}
+
+[data-v-banner-content] {
+  justify-content: center;
+  row-gap: 0.5rem;
+  column-gap: 0.75rem;
+  text-align: center;
+}
+
+/* Both buttons, Open Merchant Console then Learn more. */
+[data-v-banner] [data-v-banner-link] {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3125rem 0.75rem;
+  border: 1px solid rgba(245, 243, 240, 0.4);
+  border-radius: 6px;
+  color: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.25;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+[data-v-banner] [data-v-banner-link]:hover {
+  border-color: var(--radius-banner-fg);
+}
+
+/* The primary (coral) button, shared with the Merchant Console page. Dark ink keeps it AA on coral. */
+[data-v-banner] [data-v-banner-link]:first-of-type,
+.mc-cta > .mc-cta__primary {
+  border-color: #eb6359;
+  background-color: #eb6359;
+  color: #1f1f25;
+}
+
+[data-v-banner] [data-v-banner-link]:first-of-type:hover,
+.mc-cta > .mc-cta__primary:hover {
+  border-color: #f2877e;
+  background-color: #f2877e;
+}
+
+[data-v-banner] :is([data-v-banner-link], [data-v-banner-dismiss]):focus-visible {
+  outline: 2px solid #f2877e;
+  outline-offset: 2px;
+}
+
+[data-v-banner-dismiss] {
+  color: inherit;
+}
+
+@media (max-width: 640px) {
+  [data-v-banner][data-v-context] {
+    padding: 0.5rem 2.5rem 0.625rem 1rem;
+    font-size: 0.8125rem;
+  }
+
+  [data-v-banner-dismiss] {
+    right: 0.5rem;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Merchant Console page (docs/pages/merchant-console.mdx)
+ * ------------------------------------------------------------------------- */
+.mc-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 1.5rem 0 2rem;
+}
+
+.mc-cta > a {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.5625rem 1.125rem;
+  border: 1px solid var(--vocs-border-color-secondary);
+  border-radius: 8px;
+  color: var(--vocs-text-color-heading);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.mc-cta > a:hover {
+  border-color: var(--vocs-text-color-heading);
+}
+
+.mc-cta > a:focus-visible {
+  outline: 2px solid #eb6359;
+  outline-offset: 2px;
+}
+
+/* Screens from the console walkthrough: dark UI with a transparent canvas. */
+img.mc-shot {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  margin: 1.5rem 0;
+  border-radius: 0.75rem;
+}

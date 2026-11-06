@@ -79,7 +79,8 @@ export function registerSell(program: Command): void {
     .option('--timeout <ms>', 'timeout for each request, in milliseconds', '15000')
     .action(async (url: string | undefined, sub: CheckOptions, cmd: Command) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
-      process.exit(await runCheck(url, sub, opts));
+      // exitCode, not exit(): exiting right away can drop a large report still buffered for a pipe.
+      process.exitCode = await runCheck(url, sub, opts);
     });
 }
 

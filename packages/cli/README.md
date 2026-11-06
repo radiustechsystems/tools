@@ -34,7 +34,7 @@ Override the URL with `--rpc-url` or `RADIUS_RPC_URL` if you want to point at a 
 
 ## Wallet
 
-On first use, any account-needing command (`wallet address`, `balance`, `sign`, `send`, …) auto-creates a keystore at `~/.radius/keystore.json` with no password set (file mode `0o600`). To opt into a password, run `radius-cli wallet new --force` (or set `RADIUS_PASSWORD` before the first command). Commands that unlock the keystore take the password from `--password-file <path>` (one trailing newline ignored), else `RADIUS_PASSWORD`, else a prompt; without a terminal they fail with a message naming those two options instead of prompting. The keystore is Web3 Secret Storage v3 — compatible with geth/foundry. The address is cached in `~/.radius/config.json` so `radius-cli wallet address` is a cheap read.
+On first use, any account-needing command (`wallet address`, `balance`, `sign`, `send`, …) auto-creates a keystore at `~/.radius/keystore.json` with no password set (file mode `0o600`). No command prompts while creating it, so agents and scripts never block. To add a password later and keep the same key and address, run `radius-cli wallet password` (set `RADIUS_NEW_PASSWORD`, at least 8 characters, to skip the prompt; `--remove` removes the password); to set one at creation, set `RADIUS_PASSWORD` before the first command. (`wallet new --force` replaces the key with a new one.) Commands that unlock the keystore take the password from `--password-file <path>` (one trailing newline ignored), else `RADIUS_PASSWORD`, else a prompt; without a terminal they fail with a message naming those two options instead of prompting. The keystore is Web3 Secret Storage v3 — compatible with geth/foundry. The address is cached in `~/.radius/config.json` so `radius-cli wallet address` is a cheap read.
 
 ```bash
 radius-cli wallet new
@@ -42,6 +42,7 @@ radius-cli wallet import 0xPRIVATE_KEY
 radius-cli wallet address
 radius-cli wallet balance [0xAddr]
 radius-cli wallet export                           # decrypts and prints the private key
+radius-cli wallet password                         # set or change the keystore password, same address
 radius-cli --network testnet wallet faucet         # request a faucet drip (testnet ~0.5 SBC; mainnet ~0.01 SBC/day)
 radius-cli wallet sign "hello"                     # EIP-191 personal_sign — prints 0x signature
 radius-cli wallet sign --raw 0xdeadbeef            # sign raw hex bytes
@@ -57,6 +58,15 @@ radius-cli wallet send 0xToken "transfer(address,uint256)" 0xTo 100   # arbitrar
 ```
 
 `wallet send` takes the token as its last argument: `RUSD` for a native transfer, `SBC`, or any ERC-20 contract address. Amounts are in display units (`1.5` means 1.5 tokens) and are parsed with the token's decimals — known for SBC, read on-chain for other tokens. ERC-20 sends and `wallet balance` run on the actions of [`radius-sdk/client`](../sdk) (`erc20Actions`, `radiusActions`), so a script and the CLI encode the same calls.
+
+`wallet balance` prints one line per asset and the total, so each one greps on its own (`radius-cli wallet balance | grep '^SBC:'`):
+
+```text
+Address: 0x4F2D8a3b1c0E5d9b8e7a6c5d4e3f2a1b0c9d8e7f
+SBC:     10.000000 SBC
+RUSD:    2.345678 RUSD
+Total:   12.345678 USD
+```
 
 `--private-key 0xHEX` overrides the keystore on any command.
 
@@ -110,7 +120,7 @@ For each x402 offer it checks that the network is a known preset, the asset is t
 - `-X, --method <verb>`, `-H`, `-d`: the request, as for `wallet pay` (default `GET`).
 - `--free-requests <n>`: free quotas. When the unpaid request is served (`2xx`) with a `RateLimit-Remaining` header (or `X-RateLimit-Remaining`), the route has a free quota rather than no payment at all. `sell check` reports it (`free-quota`: limit, remaining, reset) and, when `RateLimit-Remaining + 1` requests fit within `--free-requests` (default 25), sends that many more unpaid requests to use the quota up, then checks the `402` as usual. If they do not fit, or with `--free-requests 0`, it reports the quota (`warn`, or `info` for `0`) without checking the `402`; neither fails the run. Those requests count against your own quota. A `2xx` without RateLimit headers still fails: the route is served without payment.
 - `--pricing <file|url> [--base-url <url>] [--param name=value…]`: check every route of a project. Reads a Radius Platform `pricing.md` (a local file, such as the text the platform's MCP `get_pricing_md` returns, or its published `http(s)` URL) and checks each route it lists (each listed method; `ANY` as `GET`) against that route's own `Price`, in file order. The base URL is the catalog's `Base URL`, or `--base-url` (which overrides every catalog, and is required while the file says `[Base URL]`). Path parameters come from `--param` (`:address` takes `--param address=0x…`, a `*` wildcard `--param '*=a/b'`); a route with an unfilled parameter is skipped and listed with the `--param` it needs. Output is a report per route and totals; `--json` prints `{source, ok, routes: [{catalog, name, method, path, price, free, url?, skipped?, report?}], summary}`. It exits `1` when a route fails or when no route could be checked. `--price`, `-X` and `--pay` do not apply.
-- `--probe-head`: also send an unpaid `HEAD` and warn when it answers `2xx` (routers serve `HEAD` with the `GET` handler, which x402 routes keyed `GET` do not charge).
+- `--probe-head`: also send an unpaid `HEAD` and warn when it answers `2xx` (routers serve `HEAD` with the `GET` handler; sellers on `@x402/core` before 2.29, or other x402 servers, may not charge it).
 - `--pay --threshold <decimal>`: when every check passed, make one paid request from the local wallet (`RADIUS_HOME` applies) and check that a receipt comes back. It pays on testnet unless `--network mainnet` is passed explicitly; `RADIUS_NETWORK` and the config file do not switch it to mainnet. `--networks` works as for `wallet pay`. A password-protected keystore is unlocked with `--password-file <path>` or `RADIUS_PASSWORD`; without either and without a terminal (an agent, CI), it exits `2` before any request instead of prompting.
 - `--timeout <ms>`: per request, default 15000. The paid request of `--pay` gets four times that (at least 60 s), since the seller settles before it answers; if it still fails after the payment was sent, the message says the payment may have settled.
 
@@ -122,6 +132,7 @@ Each check prints as `ok`, `warn`, `FAIL`, `skip` or `info`. Exit code `0` means
 radius-cli call 0xToken "balanceOf(address)(uint256)" 0xUser   # decoded result
 radius-cli tx 0xTransactionHash
 radius-cli receipt 0xTransactionHash
+radius-cli receipt 0xTransactionHash --event "Transfer(address indexed from, address indexed to, uint256 value)"
 radius-cli storage 0xContract 0
 radius-cli code 0xContract
 radius-cli nonce 0xAddress
@@ -129,6 +140,13 @@ radius-cli --network testnet network              # chain id, RPC, explorer, fau
 ```
 
 Function signatures use `cast` syntax: `name(args)` for state-changing calls, `name(args)(returns)` for read calls (the result is decoded against the return types).
+
+`receipt --event <sig>` decodes the receipt's logs against a `cast`-style event signature. Repeat `--event` to try several signatures against every log. A log is decoded when its `topics[0]` is the event's selector and its topic count matches the number of `indexed` params, so mark them with `indexed`: that is how the decoder tells topics from data, and how it tells an ERC-20 `Transfer` (two indexed params) from an ERC-721 `Transfer` (three). A log whose selector matches but whose topic count does not is left undecoded, with a warning on stderr. Logs that match no signature are printed raw, never dropped. Unnamed params are keyed by position (`"0"`, `"1"`, …). A log does not record which params are indexed, so mark exactly the ones the contract indexes: a signature that marks the same number of params but different ones decodes without a warning, to wrong values. With `--event`, the human output starts with `Status:`, and a reverted transaction prints an error on stderr and exits 1, so a revert never reads as "no matching events".
+
+```bash
+radius-cli --json receipt 0xTx --event "Transfer(address indexed,address indexed,uint256 indexed tokenId)" \
+  | jq -r 'map(select(.eventName == "Transfer"))[0].args.tokenId'
+```
 
 ## JSON output
 
@@ -171,6 +189,7 @@ Per-command JSON shapes:
 | Command | JSON shape |
 |---|---|
 | `wallet new` / `wallet import` | `{path, address}` |
+| `wallet password` | `{path, address, passwordless}` |
 | `wallet address` | `{address}` |
 | `wallet export` | `{address, privateKey}` |
 | `wallet sign-jwt` | `{address, token}` |
@@ -184,6 +203,7 @@ Per-command JSON shapes:
 | `call` | decoded return value (single value or array) |
 | `tx` | the full transaction object |
 | `receipt` | the full receipt object |
+| `receipt --event` | array of logs: `{address, logIndex, eventName, args}` when decoded, `{address, logIndex, topics, data}` when not |
 | `code` | `{address, code}` |
 | `nonce` | `{address, nonce}` |
 | `network` | `{name, chainId, caip2, testnet, rpcUrl, explorerUrl, faucetUrl, facilitatorUrl, nativeCurrency, asset}` |
@@ -196,7 +216,7 @@ Errors continue to go to stderr as `error: <message>` with a non-zero exit code;
 In priority order (highest first):
 
 1. **CLI flag** — `--network`, `--rpc-url`, `--private-key`, `--password-file`, `--sbc`, `--rusd`, `--json`
-2. **Environment** — `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_FACILITATOR_API_KEY` (`sell check`), `RADIUS_PASSWORD`, `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`
+2. **Environment** — `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_FACILITATOR_API_KEY` (`sell check`), `RADIUS_PASSWORD`, `RADIUS_NEW_PASSWORD` (`wallet password`), `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`
 3. **`~/.radius/config.json`** — fields: `network`, `rpcUrl`, `sbcAddress`, `rusdAddress`, `payNetworks` (e.g. `["radius", "base"]`), `rpcUrls` (`{ "base": …, "base-sepolia": … }`)
 4. **Built-in defaults** — mainnet
 
