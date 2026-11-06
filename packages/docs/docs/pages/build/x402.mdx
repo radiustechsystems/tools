@@ -1,6 +1,6 @@
 ---
 title: x402 payments
-description: How x402 HTTP payments work on Radius — request lifecycle, the payment challenge, facilitators, and why SBC payments use Permit2.
+description: How x402 HTTP payments work on Radius — request lifecycle, the payment challenge, facilitators, and when SBC payments use EIP-3009 or Permit2.
 ---
 
 import { RADIUS_FACILITATOR_MAINNET_URL, RADIUS_FACILITATOR_TESTNET_URL, MAINNET_CAIP2, TESTNET_CAIP2, X402_PERMIT2_PROXY, STABLECOIN } from '../../constants';
@@ -17,7 +17,7 @@ Radius is a strong fit for this model because fees are low and predictable.
 
 ## Start with radius-sdk
 
-Use [`radius-sdk`](/reference/radius-sdk) when it fits your stack. It handles the challenge, signing, the Permit2 approval and its gas sponsoring, settlement through the Radius facilitator, and receipts, with {STABLECOIN} and the Radius network as defaults:
+Use [`radius-sdk`](/reference/radius-sdk) when it fits your stack. It handles the challenge, signing (EIP-3009 by default, Permit2 with its approval when a seller needs it), settlement through the Radius facilitator, and receipts, with {STABLECOIN} and the Radius network as defaults:
 
 - **[Accept payments](/build/accept-payments):** charge for routes in Workers, Hono, web-standard route handlers, or frameworks with an upstream x402 adapter.
 - **[Make payments](/build/make-payments):** pay from TypeScript in any runtime with `fetch`, including browsers. From a terminal or an agent shell, use [`radius-cli`](/reference/radius-cli).
@@ -40,7 +40,7 @@ Build against the protocol directly only when the SDK does not fit, for example 
 
 ## The Radius payment challenge
 
-The `PAYMENT-REQUIRED` header holds a Base64-encoded JSON `PaymentRequired` object; the response body carries no protocol data. This is the decoded challenge `radius-sdk` sends for a 0.1 {STABLECOIN} route on mainnet, with the extension's JSON Schema omitted:
+The `PAYMENT-REQUIRED` header holds a Base64-encoded JSON `PaymentRequired` object; the response body carries no protocol data. This is the decoded challenge `radius-sdk` sends for a 0.1 {STABLECOIN} route on mainnet:
 
 ```json
 {
@@ -60,32 +60,31 @@ The `PAYMENT-REQUIRED` header holds a Base64-encoded JSON `PaymentRequired` obje
       "payTo": "0x{{MERCHANT_ADDRESS}}",
       "maxTimeoutSeconds": 300,
       "extra": {
-        "assetTransferMethod": "permit2",
+        "assetTransferMethod": "eip3009",
         "name": "Stable Coin",
         "version": "1",
         "paymentFlow": "upfront"
       }
     }
-  ],
-  "extensions": {
-    "eip2612GasSponsoring": {
-      "info": { "description": "…", "version": "1" },
-      "schema": {}
-    }
-  }
+  ]
 }
 ```
 
-| Field                             | Meaning                                                                                                             |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `network`                         | CAIP-2 chain: <code>{MAINNET_CAIP2}</code> (mainnet) or <code>{TESTNET_CAIP2}</code> (testnet)                      |
-| `amount`                          | Base units; {STABLECOIN} has six decimals, so `"100000"` is 0.1 {STABLECOIN}                                        |
-| `extra.assetTransferMethod`       | `permit2`: the payer signs a Permit2 transfer, not a token-specific authorization                                   |
-| `extra.name`, `extra.version`     | The {STABLECOIN} EIP-712 domain, used to sign the gas-sponsoring permit                                             |
-| `extra.paymentFlow`               | Set by `radius-sdk`: `upfront` settles before the handler runs; a server-side hint that clients do not need to echo |
-| `extensions.eip2612GasSponsoring` | The facilitator accepts an EIP-2612 permit for Permit2, so a first-time payer needs no approval transaction         |
+| Field                         | Meaning                                                                                                             |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `network`                     | CAIP-2 chain: <code>{MAINNET_CAIP2}</code> (mainnet) or <code>{TESTNET_CAIP2}</code> (testnet)                      |
+| `amount`                      | Base units; {STABLECOIN} has six decimals, so `"100000"` is 0.1 {STABLECOIN}                                        |
+| `extra.assetTransferMethod`   | `eip3009`: the payer signs an EIP-3009 transfer authorization for the exact amount; no approval is needed           |
+| `extra.name`, `extra.version` | The {STABLECOIN} EIP-712 domain, used to sign the authorization                                                     |
+| `extra.paymentFlow`           | Set by `radius-sdk`: `upfront` settles before the handler runs; a server-side hint that clients do not need to echo |
 
-The client answers with a `PAYMENT-SIGNATURE` header: a Base64-encoded `PaymentPayload` that echoes the chosen offer in `accepted` and carries a Permit2 `permitWitnessTransferFrom` signature. The spender is the canonical [`x402ExactPermit2Proxy`](/reference/contract-addresses#x402-contracts) (<code>{X402_PERMIT2_PROXY}</code>), which only transfers to the `payTo` address. When the payer has not approved Permit2 yet, the payload also carries the EIP-2612 permit under `extensions.eip2612GasSponsoring`. See the [x402 exact EVM scheme spec](https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md) for every field, and the [x402 facilitator API](/reference/facilitator-api) for `/verify` and `/settle`.
+The client answers with a `PAYMENT-SIGNATURE` header: a Base64-encoded `PaymentPayload` that echoes the chosen offer in `accepted` and carries an EIP-3009 `TransferWithAuthorization` signature under `payload.authorization`, from the payer to `payTo` for exactly `amount`. The facilitator submits it to the token and pays the gas, so the payer needs only {STABLECOIN} and sends no transaction.
+
+### Permit2 offers
+
+A challenge can instead offer `"assetTransferMethod": "permit2"`. That happens for the `upto` scheme, which is Permit2-only because the facilitator charges actual usage up to a signed maximum, and with a facilitator that does not list `eip3009` first for the network. The payer then signs a Permit2 `permitWitnessTransferFrom`, whose spender is the canonical [`x402ExactPermit2Proxy`](/reference/contract-addresses#x402-contracts) (<code>{X402_PERMIT2_PROXY}</code>), which only transfers to the `payTo` address. Permit2 needs a one-time {STABLECOIN} allowance. When the facilitator sponsors it, the challenge declares `extensions.eip2612GasSponsoring`, and a payer that has not approved Permit2 yet adds an EIP-2612 permit under that key in the payload instead of sending an approval transaction. `radius-sdk` declares the extension only on challenges that carry a Permit2 offer.
+
+See the [x402 exact EVM scheme spec](https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md) for every field, and the [x402 facilitator API](/reference/facilitator-api) for `/verify` and `/settle`.
 
 ## Choose a facilitator
 
@@ -96,11 +95,11 @@ The client answers with a `PAYMENT-SIGNATURE` header: a Base64-encoded `PaymentP
 | URL (mainnet) | <code>{RADIUS_FACILITATOR_MAINNET_URL}</code>                                         |
 | URL (testnet) | <code>{RADIUS_FACILITATOR_TESTNET_URL}</code>                                         |
 | Networks      | Radius mainnet (<code>{MAINNET_CAIP2}</code>), testnet (<code>{TESTNET_CAIP2}</code>) |
-| Token         | {STABLECOIN} via Permit2 with EIP-2612 gas sponsoring                                 |
+| Token         | {STABLECOIN} via EIP-3009; Permit2 with EIP-2612 gas sponsoring                       |
 | Protocol      | x402 v2                                                                               |
 | Operator      | Radius (first-party)                                                                  |
 
-The Radius facilitator settles each payment in one atomic call through the Permit2 proxy and pays all gas. It exposes `/supported`, `/verify`, `/settle`, and `/health`; it is the default in `radius-sdk`. Integrators do not need to know its settlement wallet addresses. Query the endpoint you plan to use before deployment:
+The Radius facilitator lists `eip3009` before `permit2` in `/supported`, so `radius-sdk` sellers offer EIP-3009. It settles each payment in one transaction and pays all gas. It exposes `/supported`, `/verify`, `/settle`, and `/health`; it is the default in `radius-sdk`. Integrators do not need to know its settlement wallet addresses. Query the endpoint you plan to use before deployment:
 
 ```bash
 curl https://facilitator.radiustech.xyz/supported
@@ -125,10 +124,10 @@ The token determines which x402 transfer methods are available:
 | Standard                                        | USDC (FiatTokenV2_2) | SBC (Radius native) | Integration impact                                         |
 | ----------------------------------------------- | -------------------: | ------------------: | ---------------------------------------------------------- |
 | EIP-2612 (`permit`)                             |                   ✅ |                  ✅ | Gasless approvals, used for Permit2 gas sponsoring         |
-| EIP-3009 (`transferWithAuthorization`)          |                   ✅ |                  ❌ | The `eip3009` transfer method is unavailable for SBC       |
+| EIP-3009 (`transferWithAuthorization`)          |                   ✅ |                  ✅ | The `eip3009` transfer method, the default on Radius       |
 | EIP-1271 (contract-wallet signature validation) |                   ✅ |                  ❌ | Smart-account compatibility is reduced for signed payments |
 
-Because {STABLECOIN} has no EIP-3009, Radius payments use Permit2. The payer grants Permit2 an allowance once, through a gas-sponsored EIP-2612 permit or an approval transaction. After that, each payment is a separate Permit2 signature capped to its amount, settled in one transaction.
+Radius payments use EIP-3009: each payment is one signed authorization for its exact amount, settled in one transaction, with no allowance. Permit2 remains for the `upto` scheme and for facilitators that do not offer EIP-3009. There, the payer grants Permit2 an allowance once, through a gas-sponsored EIP-2612 permit or an approval transaction, and each payment is a separate Permit2 signature capped to its amount.
 
 ## Check settlement and delivery
 
@@ -158,13 +157,13 @@ One rule applies to buyers and sellers: **before authorizing another payment, fi
 **Check status**
 
 - With a transaction hash, from the `PAYMENT-RESPONSE` header or the seller's logs: `getSettlement(radiusTestnet, txHash)` (or `radiusMainnet`) from `radius-sdk/client`. `undefined` means the node does not know the transaction yet, not that it failed.
-- Without one: the seller can check whether the payment's Permit2 nonce has been used, with `isPermit2NonceUsed(client, { owner, nonce })` from `radius-sdk/client` (or the `permit2Actions()` action). `owner` and `nonce` are `payload.permit2Authorization.from` and `.nonce` in the base64 JSON of the request's `PAYMENT-SIGNATURE` header; `radiusPayments` does not pass them to the handler, so log the header if you need this check. Until the authorization's deadline passes, an unused nonce can still be settled; after it, an unused nonce means the payment did not settle. The buyer can ask the seller.
+- Without one: the seller can check whether the payment's nonce has been used. `payer` and `nonce` are in the base64 JSON of the request's `PAYMENT-SIGNATURE` header; `radiusPayments` does not pass them to the handler, so log the header if you need this check. For an EIP-3009 payment they are `payload.authorization.from` and `.nonce`: read the token's `authorizationState(payer, nonce)` with viem. For a Permit2 payment they are `payload.permit2Authorization.from` and `.nonce`: use `isPermit2NonceUsed(client, { owner, nonce })` from `radius-sdk/client` (or the `permit2Actions()` action). Until the authorization's deadline (`validBefore` for EIP-3009) passes, an unused nonce can still be settled; after it, an unused nonce means the payment did not settle. The buyer can ask the seller.
 
 **Retry or pay again**
 
-- Submitting the **same** signed payment again cannot charge twice: each Permit2 nonce can be used once.
+- Submitting the **same** signed payment again cannot charge twice: each EIP-3009 or Permit2 nonce can be used once.
 - Signing a **new** payment while the first is uncertain can charge twice. Calling the `payFetch` from `createRadiusFetch` or `radius-cli wallet pay` again signs a new payment.
-- Switch facilitators only to one that supports the same scheme and transfer method (`exact` with `permit2` on Radius). Today that is the Radius facilitator; the [other facilitators](#other-facilitators) are not substitutes for `radius-sdk` payments.
+- Switch facilitators only to one that supports the same scheme and transfer method (`exact` with `eip3009` on Radius). Today that is the Radius facilitator; the [other facilitators](#other-facilitators) are not substitutes for `radius-sdk` payments.
 
 ## Troubleshooting
 

@@ -50,7 +50,7 @@ describe('radiusPayments 402 challenge', () => {
     expect(res.status).toBe(200);
   });
 
-  it('returns a standard x402 v2 challenge for SBC via EIP-3009 (listed first by the facilitator) with gas sponsoring declared', async () => {
+  it('returns a standard x402 v2 challenge for SBC via EIP-3009 (listed first by the facilitator), with no gas-sponsoring declaration', async () => {
     const res = await makeApp().request('http://seller.test/api/lookup?q=1');
     expect(res.status).toBe(402);
     const header = res.headers.get('payment-required');
@@ -69,7 +69,7 @@ describe('radiusPayments 402 challenge', () => {
       maxTimeoutSeconds: 300,
       extra: { assetTransferMethod: 'eip3009', name: 'Stable Coin', version: '1', paymentFlow: 'upfront' },
     });
-    expect(pr.extensions).toHaveProperty('eip2612GasSponsoring');
+    expect(pr.extensions).toBeUndefined();
   });
 
   it('supports shorthand and atomic prices, and settle:"after" omits paymentFlow', async () => {
@@ -126,7 +126,31 @@ describe('radiusPayments facilitator configuration', () => {
     expect(decodePaymentRequiredHeader(res.headers.get('payment-required')!).accepts[0].extra).toMatchObject({ assetTransferMethod: 'eip3009', name: 'Stable Coin', version: '1' });
   });
 
-  it('declares gas sponsoring only when the facilitator supports it (or when forced)', async () => {
+  it('declares gas sponsoring on a Permit2 offer when the facilitator supports it', async () => {
+    const kinds = [{ x402Version: 2, scheme: 'exact', network: 'eip155:72344', extra: { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' } }];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ kinds, extensions: ['eip2612GasSponsoring'], signers: {} }));
+    const app = new Hono();
+    app.use(radiusPayments({ network: 'testnet', payTo: PAY_TO, routes: { 'GET /p': '$1' } }));
+    app.get('/p', (c) => c.text('x'));
+    const pr = decodePaymentRequiredHeader((await app.request('/p')).headers.get('payment-required')!);
+    expect(pr.accepts[0].extra).toMatchObject({ assetTransferMethod: 'permit2' });
+    expect(pr.extensions).toHaveProperty('eip2612GasSponsoring');
+  });
+
+  it('never declares gas sponsoring on EIP-3009 offers, even when the facilitator supports it or it is forced', async () => {
+    const kinds = ['eip3009', 'permit2'].map((assetTransferMethod) => ({ x402Version: 2, scheme: 'exact', network: 'eip155:72344', extra: { assetTransferMethod, name: 'Stable Coin', version: '1' } }));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ kinds, extensions: ['eip2612GasSponsoring'], signers: {} }));
+    for (const gasSponsoring of ['auto', true] as const) {
+      const app = new Hono();
+      app.use(radiusPayments({ network: 'testnet', payTo: PAY_TO, gasSponsoring, routes: { 'GET /p': '$1' } }));
+      app.get('/p', (c) => c.text('x'));
+      const pr = decodePaymentRequiredHeader((await app.request('/p')).headers.get('payment-required')!);
+      expect(pr.accepts[0].extra).toMatchObject({ assetTransferMethod: 'eip3009' });
+      expect(pr.extensions).toBeUndefined();
+    }
+  });
+
+  it('declares gas sponsoring on Permit2 offers only when the facilitator supports it (or when forced)', async () => {
     const supportedWithout = { kinds: [{ x402Version: 2, scheme: 'exact', network: 'eip155:72344', extra: { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' } }], extensions: [], signers: {} };
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json(supportedWithout));
     const build = (gasSponsoring?: 'auto' | boolean) => {

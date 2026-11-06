@@ -6,6 +6,10 @@ newest first, as `## <version> (<YYYY-MM-DD>)` with the date it reached `main`. 
 notes (docs.radiustech.xyz/release-notes) are built from this file: write each change's first
 sentence for developers who use the skills.
 
+## 0.2.3 (2026-11-06)
+
+- The `x402` skill says Radius sellers using `radius-sdk` offer EIP-3009, which needs no approval, and treats Permit2 and its approval as the path for `upto` and for facilitators without EIP-3009. Its `/supported` examples list `eip3009` before `permit2`, and it notes that the legacy `cast` flow and `scripts/x402-pay.mjs` sign only Permit2 offers.
+
 ## 0.2.2 (2026-10-26)
 
 - The buyer install commands in the `x402` and `radius-dev` skills install both x402 peer packages, `@x402/core` and `@x402/evm`. `@x402/evm` is an optional peer that npm and pnpm skip, which left `radius-sdk/client` unable to load. The `sell-api` skill names `@x402/core` for sellers, and the plugin README says which peer each entry point needs.

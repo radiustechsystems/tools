@@ -291,7 +291,24 @@ describe('radiusPayments on several networks', () => {
     expect(pr.accepts).toHaveLength(2);
     expect(pr.accepts[0]).toMatchObject({ network: 'eip155:72344', asset: SBC.address, amount: '1000', payTo: PAY_TO, extra: { assetTransferMethod: 'eip3009', name: 'Stable Coin', version: '1' } });
     expect(pr.accepts[1]).toMatchObject({ network: 'eip155:84532', asset: USDC_BASE_SEPOLIA.address, amount: '1000', payTo: PAY_TO, extra: { assetTransferMethod: 'eip3009', name: 'USDC', version: '2' } });
-    // Radius's facilitator sponsors Permit2 approvals; Base Sepolia's does not, and the declaration stays.
+    // Both offers are EIP-3009, which needs no approval: nothing to sponsor, so nothing is declared.
+    expect(pr.extensions).toBeUndefined();
+  });
+
+  it('keeps the gas-sponsoring declaration while a sponsored Permit2 offer is in the 402', async () => {
+    mockBaseFacilitator();
+    const radiusPermit2 = {
+      verify: async () => ({ isValid: true }),
+      settle: async () => ({ success: true, transaction: TX, network: radiusTestnet.network }),
+      getSupported: async () => ({
+        kinds: [{ x402Version: 2, scheme: 'exact', network: radiusTestnet.network, extra: { assetTransferMethod: 'permit2', name: SBC.name, version: SBC.version } }],
+        extensions: ['eip2612GasSponsoring'],
+        signers: {},
+      }),
+    };
+    const app = radiusPayments({ networks: [{ network: 'testnet', facilitator: radiusPermit2 }, 'base-sepolia'], payTo: PAY_TO, routes: { 'GET /api/lookup': '$0.001' } });
+    const pr = decodePaymentRequiredHeader((await app(new Request('http://seller.test/api/lookup'), () => Response.json({}))).headers.get('payment-required')!);
+    expect(pr.accepts.map((a) => a.extra.assetTransferMethod)).toEqual(['permit2', 'eip3009']);
     expect(pr.extensions).toHaveProperty('eip2612GasSponsoring');
   });
 

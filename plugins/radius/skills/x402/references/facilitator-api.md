@@ -55,6 +55,16 @@ Returns what payment kinds and extensions the facilitator supports.
       "scheme": "exact",
       "network": "eip155:723487",
       "extra": {
+        "assetTransferMethod": "eip3009",
+        "name": "Stable Coin",
+        "version": "1"
+      }
+    },
+    {
+      "x402Version": 2,
+      "scheme": "exact",
+      "network": "eip155:723487",
+      "extra": {
         "assetTransferMethod": "permit2",
         "name": "Stable Coin",
         "version": "1"
@@ -66,7 +76,7 @@ Returns what payment kinds and extensions the facilitator supports.
 }
 ```
 
-Use this endpoint to verify a facilitator supports your target network and transfer method before integrating.
+Use this endpoint to verify a facilitator supports your target network and transfer method before integrating. A seller offers the first transfer method listed, so sellers using the Radius facilitator offer EIP-3009, which needs no approval. `eip2612GasSponsoring` applies only to Permit2 payments.
 
 ---
 
@@ -89,7 +99,7 @@ Validates a payment signature without submitting anything on-chain. Use this to 
     "extra": {
       "name": "Stable Coin",
       "version": "1",
-      "assetTransferMethod": "permit2"
+      "assetTransferMethod": "eip3009"
     }
   }
 }

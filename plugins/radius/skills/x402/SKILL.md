@@ -41,7 +41,7 @@ Client                          Server                         Facilitator
   │<── 200 + data + PAYMENT-RESPONSE ─│
 ```
 
-For a v2 `exact` Permit2 offer with `eip2612GasSponsoring`, the buyer signs an EIP-2612 permit for the one-time approval and a Permit2 transfer authorization. Without sponsoring, the SDK can send an approval transaction. Other supported offers use different signatures: v2 `exact` may use EIP-3009, v2 `upto` uses Permit2, and v1 `exact` uses EIP-3009. `upto` authorizes a maximum; the actual charge comes from the payment receipt. Use the SDK to select and encode the offered method.
+On Radius, a `radius-sdk` seller offers v2 `exact` via EIP-3009 (radius-sdk 0.4.0 or later with the Radius facilitator): the buyer signs one EIP-3009 authorization for the exact amount, with no approval and no gas. Permit2 is used for v2 `upto` and for facilitators that do not offer EIP-3009. For a Permit2 offer with `eip2612GasSponsoring`, the buyer signs an EIP-2612 permit for the one-time approval and a Permit2 transfer authorization; without sponsoring, the SDK can send an approval transaction. v1 `exact` uses EIP-3009. `upto` authorizes a maximum; the actual charge comes from the payment receipt. Use the SDK to select and encode the offered method.
 
 HTTP x402 v2 carries protocol data in headers:
 - `PAYMENT-REQUIRED` — server to client, base64-encoded payment requirements
@@ -65,7 +65,7 @@ All x402 integration on Radius uses these constants:
 
 > **Facilitator note:** Radius-operated facilitators are the recommended defaults for both
 > mainnet and testnet. Check `/supported` before integrating to confirm the target network,
-> transfer method (`permit2`), and extensions such as `eip2612GasSponsoring`.
+> transfer methods (`eip3009`, listed before `permit2`), and extensions such as `eip2612GasSponsoring`.
 >
 > **Third-party caveat:** Some non-Radius facilitators may differ in supported networks,
 > response shape, or EIP-2612 gas sponsoring behavior. Verify their `/supported`, `/health`,
@@ -118,7 +118,7 @@ curl -s https://facilitator.testnet.radiustech.xyz/health | jq .status
 curl -s https://facilitator.testnet.radiustech.xyz/supported | jq '.kinds[] | .network'
 ```
 
-The `/supported` response confirms the facilitator handles your network, transfer method (`permit2`), and EIP-2612 domain values. See [facilitator-api.md](references/facilitator-api.md) for full response format.
+The `/supported` response confirms the facilitator handles your network, transfer methods (`eip3009` first, then `permit2`), and the token's EIP-712 domain values. See [facilitator-api.md](references/facilitator-api.md) for full response format.
 
 **2. Wallet has SBC tokens**
 
@@ -136,7 +136,7 @@ No SBC? Use the **dripping-faucet** skill to get tokens.
 
 **3. Third-party facilitators: check Permit2 approval requirements**
 
-Radius-operated facilitators support EIP-2612 gas sponsoring for first-time wallets. Some third-party facilitators may require fresh wallets to pre-approve the Permit2 contract before their first payment. See the [pre-approval helper](references/x402-client.md#third-party-facilitators-pre-approving-permit2).
+EIP-3009 offers need no approval. For Permit2 offers, Radius-operated facilitators support EIP-2612 gas sponsoring for first-time wallets. Some third-party facilitators may require fresh wallets to pre-approve the Permit2 contract before their first payment. See the [pre-approval helper](references/x402-client.md#third-party-facilitators-pre-approving-permit2).
 
 **4. Wallet signing convention**
 
@@ -144,7 +144,7 @@ Follow the shared Radius wallet convention from the **radius-dev** skill:
 
 - Fresh one-shot agent demos and terminal access should use `radius-cli wallet pay`.
 - App-code clients should use `createRadiusFetch()` with a viem account or wallet client. Store any key material in the application's secrets system.
-- [x402-cli-cast.md](references/x402-cli-cast.md) and `scripts/x402-pay.mjs` are legacy/specialized references for environments that cannot use `radius-cli`.
+- [x402-cli-cast.md](references/x402-cli-cast.md) and `scripts/x402-pay.mjs` are legacy/specialized references for environments that cannot use `radius-cli`. Both sign only a sponsored Permit2 offer, so they cannot pay the EIP-3009 offers that `radius-sdk` sellers on Radius send; use `radius-cli` or `createRadiusFetch()` for those.
 - Never request, log, hardcode, or pass raw private keys as CLI arguments such as `--private-key`.
 
 ## Operating procedure

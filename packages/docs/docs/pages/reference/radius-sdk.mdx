@@ -71,7 +71,7 @@ app.use('/api/*', radiusPayments({ network: 'testnet', payTo: '0xYourWalletAddre
 | `networks`      | Array of networks or `{ network, facilitator }` | —                  | Instead of `network`: every route offers one payment option per network; see [Several networks](#several-networks)                                                 |
 | `mpp`           | `{ secretKey, realm? }`                         | —                  | Also accept [MPP](#mpp) payments                                                                                                                                   |
 | `settle`        | `'before'` or `'after'`                         | `'before'`         | `'before'` settles, then runs the handler, with no separate `/verify` call; `'after'` calls `/verify`, runs the handler, and settles only if it responds below 400 |
-| `gasSponsoring` | `'auto'` or boolean                             | `'auto'`           | Declare `eip2612GasSponsoring` in 402s; `'auto'` follows the facilitator's `/supported`                                                                            |
+| `gasSponsoring` | `'auto'` or boolean                             | `'auto'`           | Declare `eip2612GasSponsoring` in 402s with a Permit2 offer (never for EIP-3009 offers); `'auto'` follows the facilitator's `/supported`                           |
 | `facilitator`   | options object or `FacilitatorClient`           | Radius facilitator | See [Facilitator](#facilitator)                                                                                                                                    |
 | `onSettled`     | `(receipt, context) => void \| Promise<void>`   | —                  | Called once per settled payment                                                                                                                                    |
 
@@ -217,7 +217,7 @@ Payment rules:
 | `resource`        | `{ url, description, mimeType }` from the challenge                                 |
 | `scheme`          | `exact` or `upto`; an MPP charge is `exact`                                         |
 | `transferMethod`  | `permit2` or `eip3009`                                                              |
-| `gasSponsored`    | Whether the facilitator sponsors the Permit2 approval                               |
+| `gasSponsored`    | Whether the facilitator sponsors the Permit2 approval; `false` for EIP-3009 offers  |
 | `x402Version`     | x402 offers: `1` or `2`                                                             |
 | `requirements`    | x402 offers: the raw requirement from the challenge                                 |
 | `challenge`       | MPP offers: the `WWW-Authenticate: Payment` challenge                               |

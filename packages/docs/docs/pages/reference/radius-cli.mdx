@@ -254,7 +254,9 @@ The CLI pays [x402](/build/x402) and [MPP](/reference/radius-sdk#mpp) (`WWW-Auth
 
 ### Permit2 approval
 
-Permit2 payments need a {STABLECOIN} allowance for the Permit2 contract. When the server declares `eip2612GasSponsoring`, as the Radius facilitator does, the CLI signs a permit for the payment amount with each payment and sends no approval transaction, so a wallet that holds only {STABLECOIN} can pay.
+EIP-3009 offers, the default on Radius, need no approval: the CLI signs one authorization for the payment amount, and `--approve-permit2` has no effect. The rest of this section applies to Permit2 offers, which come from `upto` routes and from facilitators that do not offer EIP-3009.
+
+Permit2 payments need a {STABLECOIN} allowance for the Permit2 contract. When the server declares `eip2612GasSponsoring`, as it does for Permit2 offers settled by the Radius facilitator, the CLI signs a permit for the payment amount with each payment and sends no approval transaction, so a wallet that holds only {STABLECOIN} can pay.
 
 A facilitator that sponsors a raw unlimited approve (`erc20ApprovalGasSponsoring`) instead of a permit is treated like an unsponsored approval: the CLI prompts, or refuses without a TTY unless you pass `--approve-permit2` (or `-y`).
 
