@@ -7,14 +7,19 @@
 //   and Analytics Engine. Scripts, styles and images stay asset-first. Agent requests first pass the
 //   Radius Platform policy of RADIUS_PROJECT_ID, which allows, denies, rate-limits or charges them.
 import { Hono } from 'hono';
-import { createHandle, radiusPolicy, syncPolicy, type RadiusEnv } from '@radiustech/platform-sdk';
+import { createHandle, radiusPolicy, syncPolicy, syncPricingMd, type RadiusEnv } from '@radiustech/platform-sdk';
 import { radiusTestnet } from 'radius-sdk';
 
 // Counts the policy's free quotas and rate limits, and claims payments so one isn't used twice.
 export { RadiusCounter } from '@radiustech/platform-sdk/limiters/do';
 
 type Env = {
-  Bindings: RadiusEnv & { TRY_PAY_TO: `0x${string}`; ASSETS: Fetcher; AGENT_FETCHES: AnalyticsEngineDataset };
+  Bindings: RadiusEnv & {
+    TRY_PAY_TO: `0x${string}`;
+    ASSETS: Fetcher;
+    AGENT_FETCHES: AnalyticsEngineDataset;
+    BROWSER_SIGNALS: AnalyticsEngineDataset;
+  };
 };
 
 const FAUCET_URL = radiusTestnet.faucetUrl as string;
@@ -90,13 +95,12 @@ function varyOnAccept(res: Response): Response {
   return varied;
 }
 
-// Verified bots (Cloudflare's `cf.verifiedBotCategory`) that pass the policy untouched: search
-// engines, so the docs stay indexed, and link unfurls, uptime checks and webhooks. AI crawlers,
-// AI search, AI assistants and SEO tools are gated like any other agent.
-const UNGATED_BOTS = new Set(['Search Engine Crawler', 'Page Preview', 'Monitoring & Analytics', 'Webhooks']);
-
-// Enforces the project's policy, synced from the platform into RADIUS_POLICY by the cron trigger.
-const radius = createHandle<Env['Bindings']>();
+// Enforces the project's policy, synced from the platform into RADIUS_POLICY by the cron trigger. It
+// reads the request's `cf.verifiedBotCategory` itself, so the policy decides what verified bots
+// (search engines, link previews, monitors, webhooks, AI crawlers) get. `pricingMd` serves the
+// project's published catalog at `/pricing.md` (an agent request, before the policy: never charged),
+// synced into RADIUS_POLICY by the cron trigger below.
+const radius = createHandle<Env['Bindings']>({ pricingMd: true });
 
 // Serves pages and agent files, records the requests agents make, and gates agents with the policy.
 //
@@ -105,7 +109,9 @@ const radius = createHandle<Env['Bindings']>();
 // Analytics Engine data point (for weekly KPIs). A request is from an agent when it prefers Markdown
 // for a page or carries no `Sec-Fetch-Mode` header: every current browser sends that header, on page
 // loads and on the page's own fetches (PageActions prefetches each page's `.md` twin), and HTTP
-// clients and agent fetch tools don't. No IP address, query string or body is recorded.
+// clients and agent fetch tools don't. No IP address, query string or body is recorded. Agents that
+// drive a real browser send the header too, so `recordBrowser` samples browser page loads and records
+// every one that carries an agent signal.
 //
 // Only agents meet the policy: people reading the docs in a browser are never counted or charged.
 // The recorded status is the policy's answer when it refused the request (402, 404, 429).
@@ -114,11 +120,11 @@ async function serveSite(request: Request, env: Env['Bindings'], ctx: ExecutionC
   const isPage = PAGE.test(url.pathname);
   const fromAgent =
     !request.headers.has('sec-fetch-mode') || (isPage && prefersMarkdown(request.headers.get('accept')));
-  const gated = fromAgent && !UNGATED_BOTS.has(String(request.cf?.verifiedBotCategory ?? ''));
-  const res = gated
+  const res = fromAgent
     ? await radius(request, env, (forwarded) => serveStatic(forwarded, env), ctx)
     : await serveStatic(request, env);
   if ((isPage || AGENT_FILE.test(url.pathname)) && fromAgent) record(request, res, env);
+  else if (isPage && request.headers.get('sec-fetch-mode') === 'navigate') recordBrowser(request, res, env);
   return res;
 }
 
@@ -137,8 +143,34 @@ async function serveStatic(request: Request, env: Env['Bindings']): Promise<Resp
   return res;
 }
 
+// What a request says about its client beyond the user agent, which any client can set. Used to check a
+// claimed name against the network it came from, and to find agents that drive a real browser.
+// - verifiedBotCategory: Cloudflare's check of a known bot against its operator's IPs and reverse DNS
+//   (empty when unverified, so a `ClaudeBot` user agent without it is not Anthropic's crawler).
+// - asn: the network's number, steadier than its name (`Google LLC` covers Googlebot and every GCP customer).
+// - signatureAgent / signed: Web Bot Auth (RFC 9421 message signatures). Presence only: the signature
+//   is not verified here.
+// - httpProtocol, tlsVersion, secChUa, acceptLanguage: browsers send client hints and a language;
+//   most HTTP clients don't. Only whether Accept-Language is present is kept, not its value.
+function clientSignals(request: Request) {
+  const headers = request.headers;
+  const secChUa = headers.get('sec-ch-ua') ?? '';
+  return {
+    verifiedBotCategory: String(request.cf?.verifiedBotCategory ?? ''),
+    asn: Number(request.cf?.asn ?? 0),
+    signatureAgent: (headers.get('signature-agent') ?? '').slice(0, 256),
+    signed: headers.has('signature-input') && headers.has('signature'),
+    httpProtocol: String(request.cf?.httpProtocol ?? ''),
+    tlsVersion: String(request.cf?.tlsVersion ?? ''),
+    accept: (headers.get('accept') ?? '').slice(0, 256),
+    secChUa: secChUa.slice(0, 256),
+    acceptLanguage: headers.has('accept-language'),
+  };
+}
+
 function record(request: Request, res: Response, env: Env['Bindings']) {
   const url = new URL(request.url);
+  const signals = clientSignals(request);
   const entry = {
     path: url.pathname,
     method: request.method,
@@ -149,13 +181,17 @@ function record(request: Request, res: Response, env: Env['Bindings']) {
     asOrganization: String(request.cf?.asOrganization ?? ''),
     host: url.hostname,
     contentType: (res.headers.get('content-type') ?? '').split(';')[0]!.trim(),
+    ...signals,
   };
   console.log(JSON.stringify({ message: 'agent fetch', ...entry }));
   // Column order is the query schema for the `docs_agent_fetches` dataset: keep it append-only.
   // blob1 path, blob2 method, blob3 user agent, blob4 referer, blob5 country, blob6 AS organization,
   // blob7 host (filter on docs.radiustech.xyz: previews write here too), blob8 content type served
-  // (`text/markdown` on a page path means the agent negotiated Markdown); double1 HTTP status.
-  // The path is the index (sampling key).
+  // (`text/markdown` on a page path means the agent negotiated Markdown), blob9 verified bot category,
+  // blob10 Signature-Agent, blob11 HTTP protocol, blob12 TLS version, blob13 Accept, blob14 Sec-CH-UA;
+  // double1 HTTP status, double2 ASN, double3 signed (1 when Signature-Input and Signature are present),
+  // double4 Accept-Language present (1 or 0). Rows written before blob9 and double2 existed read as
+  // empty strings and 0. The path is the index (sampling key).
   env.AGENT_FETCHES.writeDataPoint({
     indexes: [entry.path.slice(0, 96)],
     blobs: [
@@ -167,8 +203,75 @@ function record(request: Request, res: Response, env: Env['Bindings']) {
       entry.asOrganization,
       entry.host,
       entry.contentType,
+      signals.verifiedBotCategory,
+      signals.signatureAgent,
+      signals.httpProtocol,
+      signals.tlsVersion,
+      signals.accept,
+      signals.secChUa,
     ],
-    doubles: [entry.status],
+    doubles: [entry.status, signals.asn, signals.signed ? 1 : 0, signals.acceptLanguage ? 1 : 0],
+  });
+}
+
+// One in this many browser page loads with no agent signal is recorded, as a baseline to compare with.
+const BROWSER_SAMPLE = 10;
+
+// Records browser page loads (`Sec-Fetch-Mode: navigate`) that might be an agent driving a browser,
+// such as an agentic browser or headless Chrome, which `record` never sees because they send the
+// header. Every load with a signal is recorded: a Web Bot Auth signature, a Cloudflare verified bot
+// category, or `HeadlessChrome` in the user agent or client hints. One in BROWSER_SAMPLE of the rest is
+// recorded with weight BROWSER_SAMPLE, so `SUM(double5)` estimates all page loads. Like `record`, it
+// keeps no IP address, query string or body.
+function recordBrowser(request: Request, res: Response, env: Env['Bindings']) {
+  const signals = clientSignals(request);
+  const userAgent = request.headers.get('user-agent') ?? '';
+  const headless = /HeadlessChrome/i.test(userAgent) || /HeadlessChrome/i.test(signals.secChUa);
+  const signal = signals.signed || signals.signatureAgent !== '' || signals.verifiedBotCategory !== '' || headless;
+  if (!signal && Math.random() * BROWSER_SAMPLE >= 1) return;
+  const url = new URL(request.url);
+  const entry = {
+    path: url.pathname,
+    status: res.status,
+    userAgent,
+    country: String(request.cf?.country ?? ''),
+    asOrganization: String(request.cf?.asOrganization ?? ''),
+    host: url.hostname,
+    reason: signal ? 'signal' : 'sample',
+    weight: signal ? 1 : BROWSER_SAMPLE,
+    headless,
+    ...signals,
+  };
+  console.log(JSON.stringify({ message: 'browser fetch', ...entry }));
+  // Column order is the query schema for the `docs_browser_signals` dataset: keep it append-only.
+  // blob1 path, blob2 user agent, blob3 country, blob4 AS organization, blob5 host (filter on
+  // docs.radiustech.xyz), blob6 verified bot category, blob7 Signature-Agent, blob8 HTTP protocol,
+  // blob9 TLS version, blob10 Sec-CH-UA, blob11 reason (`signal` or `sample`); double1 HTTP status,
+  // double2 ASN, double3 signed, double4 Accept-Language present, double5 weight (1 for a signal, else
+  // BROWSER_SAMPLE), double6 headless (1 or 0). The path is the index (sampling key).
+  env.BROWSER_SIGNALS.writeDataPoint({
+    indexes: [entry.path.slice(0, 96)],
+    blobs: [
+      entry.path,
+      userAgent.slice(0, 512),
+      entry.country,
+      entry.asOrganization,
+      entry.host,
+      signals.verifiedBotCategory,
+      signals.signatureAgent,
+      signals.httpProtocol,
+      signals.tlsVersion,
+      signals.secChUa,
+      entry.reason,
+    ],
+    doubles: [
+      entry.status,
+      signals.asn,
+      signals.signed ? 1 : 0,
+      signals.acceptLanguage ? 1 : 0,
+      entry.weight,
+      headless ? 1 : 0,
+    ],
   });
 }
 
@@ -177,10 +280,14 @@ export default {
     if (new URL(request.url).pathname.startsWith('/api/try/')) return app.fetch(request, env, ctx);
     return serveSite(request, env, ctx);
   },
-  // The cron in wrangler.jsonc: copies the project's policy into RADIUS_POLICY when it changed. Without the
-  // RADIUS_API_KEY secret there is nothing to sync, and agent requests stay ungated.
+  // The cron in wrangler.jsonc: copies the project's policy and its published pricing.md into RADIUS_POLICY
+  // when they changed, each sync failing on its own. Without the RADIUS_API_KEY secret there is nothing to
+  // sync, and agent requests stay ungated.
   scheduled(_controller, env, ctx) {
     if (!env.RADIUS_API_KEY) return;
     ctx.waitUntil(syncPolicy(env).catch((error: unknown) => console.error('radius: policy sync failed:', error)));
+    ctx.waitUntil(
+      syncPricingMd(env).catch((error: unknown) => console.error('radius: pricing.md sync failed:', error)),
+    );
   },
 } satisfies ExportedHandler<Env['Bindings']>;
