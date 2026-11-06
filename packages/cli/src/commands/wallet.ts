@@ -1,13 +1,14 @@
 import { Command } from 'commander';
 import { confirm, password as promptPassword } from '@inquirer/prompts';
 import { readFileSync } from 'node:fs';
-import { encodeFunctionData, isAddress, parseEther, verifyMessage, type Address, type Hex } from 'viem';
+import { encodeFunctionData, formatUnits, isAddress, parseEther, verifyMessage, type Address, type Hex } from 'viem';
+import type { TokenTransfer } from 'radius-sdk/client';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { radiusNetwork, resolveConfig, readPasswordless, writeCachedAddress, writePasswordless } from '../lib/config.js';
 import { changeKeystorePassword, keystoreExists, loadKeystorePrivateKey, saveKeystore } from '../lib/keystore.js';
 import { getOwnAddress, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
-import { formatBalanceLines, parseAmountArg, parseTokenArg, readBalances } from '../lib/erc20.js';
+import { describeToken, formatBalanceLines, listTransfers, parseAmountArg, parseTokenArg, readBalances, toTransferRow, transferFilters, type TransferSides } from '../lib/erc20.js';
 import { signJwt } from '../lib/jwt.js';
 import { parseTypedData } from '../lib/typedData.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
@@ -15,7 +16,9 @@ import { errDetail, jsonStringify } from '../lib/format.js';
 import { registerWalletPay } from './walletPay.js';
 import type { GlobalOptions } from '../types.js';
 import { explorerTxUrl } from 'radius-sdk';
-import { createRadiusFetch, type TokenInput } from 'radius-sdk/client';
+import { createRadiusFetch, MAX_LOG_RANGE, type TokenInput } from 'radius-sdk/client';
+
+const TOKEN_ARG_HELP = 'SBC (default) or any ERC-20 contract address';
 
 function readMessageArg(arg: string, raw: boolean): string | { raw: Hex } {
   const text = arg === '-' ? readFileSync(0, 'utf8') : arg;
@@ -379,7 +382,201 @@ export function registerWallet(program: Command): void {
       );
     });
 
+  wallet
+    .command('approve')
+    .description('Approve a spender to move tokens from the local account (ERC-20 approve)')
+    .argument('<spender>', 'address allowed to spend')
+    .argument('<amount>', 'amount in display units (e.g. 1.5), or "max" for an unlimited approval')
+    .argument('[token]', TOKEN_ARG_HELP, 'SBC')
+    .option('--no-wait', 'do not wait for the receipt before returning')
+    .option('--gas-limit <units>', 'gas limit for the transaction (skips the eth_estimateGas roundtrip)')
+    .action(async (spender: string, amountArg: string, tokenArg: string, subOpts: { wait?: boolean; gasLimit?: string }, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      if (!isAddress(spender)) throw new Error(`Not a valid address: ${spender}`);
+      const token = parseTokenArg(cfg, tokenArg);
+      const amount = parseAmountArg(amountArg);
+      const gas = parseGasLimit(subOpts.gasLimit);
+
+      const account = await requireAccount(cfg, opts.privateKey);
+      const publicClient = makePublicClient(cfg);
+      const walletClient = makeWalletClient(cfg, account);
+      const { hash } = await walletClient.approve({ token, spender: spender as Address, amount, gas, wait: false });
+      await reportTx(publicClient, hash, opts, subOpts.wait !== false);
+    });
+
+  wallet
+    .command('allowance')
+    .description('Show how much of a token a spender may move from an owner (ERC-20 allowance)')
+    .argument('<spender>', 'address allowed to spend')
+    .argument('[token]', TOKEN_ARG_HELP, 'SBC')
+    .option('--owner <address>', 'token owner (defaults to the local account)')
+    .action(async (spender: string, tokenArg: string, subOpts: { owner?: string }, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      if (!isAddress(spender)) throw new Error(`Not a valid address: ${spender}`);
+      let owner: Address;
+      if (subOpts.owner) {
+        if (!isAddress(subOpts.owner)) throw new Error(`Not a valid address: ${subOpts.owner}`);
+        owner = subOpts.owner as Address;
+      } else {
+        owner = await getOwnAddress(cfg, opts.privateKey);
+      }
+      const token = parseTokenArg(cfg, tokenArg);
+
+      const client = makePublicClient(cfg);
+      const [info, allowanceWei] = await Promise.all([
+        describeToken(client, token),
+        client.getAllowance({ token, owner, spender: spender as Address }),
+      ]);
+      const allowance = formatUnits(allowanceWei, info.decimals);
+      if (opts.json) {
+        console.log(jsonStringify({ token: info.address, symbol: info.symbol, decimals: info.decimals, owner, spender, allowance, allowanceWei }));
+        return;
+      }
+      console.log(`Token:     ${info.symbol} (${info.address})`);
+      console.log(`Owner:     ${owner}`);
+      console.log(`Spender:   ${spender}`);
+      console.log(`Allowance: ${allowance} ${info.symbol}`);
+    });
+
+  wallet
+    .command('token')
+    .description('Show an ERC-20 token\'s name, symbol, decimals and total supply')
+    .argument('[token]', TOKEN_ARG_HELP, 'SBC')
+    .action(async (tokenArg: string, _subOpts, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      const client = makePublicClient(cfg);
+      const meta = await client.getTokenMetadata({ token: parseTokenArg(cfg, tokenArg) });
+      if (opts.json) {
+        console.log(jsonStringify({ ...meta, totalSupplyFormatted: formatUnits(meta.totalSupply, meta.decimals) }));
+        return;
+      }
+      console.log(`Address:      ${meta.address}`);
+      console.log(`Name:         ${meta.name}`);
+      console.log(`Symbol:       ${meta.symbol}`);
+      console.log(`Decimals:     ${meta.decimals}`);
+      console.log(`Total supply: ${formatUnits(meta.totalSupply, meta.decimals)} ${meta.symbol}`);
+    });
+
+  wallet
+    .command('transfers')
+    .description('List ERC-20 Transfer events of a token (defaults to those sent or received by the local account)')
+    .argument('[token]', TOKEN_ARG_HELP, 'SBC')
+    .option('--from <address>', 'only transfers sent by this address')
+    .option('--to <address>', 'only transfers received by this address')
+    .option('--address <address>', 'transfers sent or received by this address (default: local account)')
+    .option('--all', 'every transfer of the token, no address filter')
+    .option('--blocks <n>', `look back this many blocks from the latest (default: ${MAX_LOG_RANGE}; Radius block numbers are unix milliseconds, so about 16.7 minutes)`)
+    .option('--from-block <n>', 'first block to search (overrides --blocks)')
+    .option('--to-block <n>', 'last block to search (default: latest)')
+    .action(async (tokenArg: string, subOpts: TransferSideOptions & { blocks?: string; fromBlock?: string; toBlock?: string }, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      const token = parseTokenArg(cfg, tokenArg);
+      const client = makePublicClient(cfg);
+      const sides = await resolveTransferSides(cfg, opts, subOpts);
+
+      const toBlock = subOpts.toBlock !== undefined ? parseBlock(subOpts.toBlock, '--to-block') : await client.getBlockNumber();
+      let fromBlock: bigint;
+      if (subOpts.fromBlock !== undefined) {
+        fromBlock = parseBlock(subOpts.fromBlock, '--from-block');
+      } else {
+        const lookback = subOpts.blocks !== undefined ? parseBlock(subOpts.blocks, '--blocks') : MAX_LOG_RANGE;
+        fromBlock = toBlock > lookback ? toBlock - lookback : 0n;
+      }
+      if (fromBlock > toBlock) throw new Error(`--from-block ${fromBlock} is after --to-block ${toBlock}`);
+
+      const [info, transfers] = await Promise.all([describeToken(client, token), listTransfers(client, { token, ...sides, fromBlock, toBlock })]);
+      const rows = transfers.map((t) => toTransferRow(t, info));
+      if (opts.json) {
+        console.log(jsonStringify({ token: info.address, symbol: info.symbol, fromBlock, toBlock, transfers: rows }));
+        return;
+      }
+      console.log(`${info.symbol} transfers, blocks ${fromBlock}–${toBlock}: ${rows.length}`);
+      for (const t of transfers) console.log(formatTransferLine(t, info));
+    });
+
+  wallet
+    .command('watch')
+    .description('Stream ERC-20 Transfer events of a token as they happen (defaults to the local account, Ctrl-C to stop)')
+    .argument('[token]', TOKEN_ARG_HELP, 'SBC')
+    .option('--from <address>', 'only transfers sent by this address')
+    .option('--to <address>', 'only transfers received by this address')
+    .option('--address <address>', 'transfers sent or received by this address (default: local account)')
+    .option('--all', 'every transfer of the token, no address filter')
+    .option('--poll <ms>', 'polling interval in milliseconds (default: the client\'s)')
+    .action(async (tokenArg: string, subOpts: TransferSideOptions & { poll?: string }, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      const token = parseTokenArg(cfg, tokenArg);
+      const client = makePublicClient(cfg);
+      const sides = await resolveTransferSides(cfg, opts, subOpts);
+      const pollingInterval = subOpts.poll !== undefined ? Number(parseBlock(subOpts.poll, '--poll')) : undefined;
+      const info = await describeToken(client, token);
+
+      const seen = new Set<string>();
+      const onTransfer = (t: TokenTransfer) => {
+        const key = `${t.transactionHash}:${t.logIndex}`;
+        if (seen.has(key)) return; // a self-transfer matches both directions
+        seen.add(key);
+        if (opts.json) console.log(jsonStringify(toTransferRow(t, info), 0));
+        else console.log(formatTransferLine(t, info));
+      };
+      const onError = (e: Error) => process.stderr.write(`watch: ${e.message}\n`);
+      const stops = transferFilters(sides).map((f) => client.watchTransfers({ token, ...f, onTransfer, onError, pollingInterval }));
+      if (!opts.json) {
+        const who = sides.from || sides.to ? [sides.from && `from ${sides.from}`, sides.to && `to ${sides.to}`].filter(Boolean).join(' ') : sides.address ? `involving ${sides.address}` : 'all';
+        process.stderr.write(`Watching ${info.symbol} transfers (${who}) on ${cfg.network}… Ctrl-C to stop\n`);
+      }
+      await new Promise<void>((resolve) => {
+        const stop = () => {
+          for (const unwatch of stops) unwatch();
+          resolve();
+        };
+        process.once('SIGINT', stop);
+        process.once('SIGTERM', stop);
+      });
+    });
+
   registerWalletPay(wallet);
+}
+
+interface TransferSideOptions {
+  from?: string;
+  to?: string;
+  address?: string;
+  all?: boolean;
+}
+
+/** `--from` / `--to` win; `--all` drops the address filter; otherwise `--address` or the local account, both directions. */
+async function resolveTransferSides(cfg: ReturnType<typeof resolveConfig>, opts: GlobalOptions, subOpts: TransferSideOptions): Promise<TransferSides> {
+  const addr = (value: string | undefined, flag: string): Address | undefined => {
+    if (value === undefined) return undefined;
+    if (!isAddress(value)) throw new Error(`${flag}: not a valid address: ${value}`);
+    return value as Address;
+  };
+  const from = addr(subOpts.from, '--from');
+  const to = addr(subOpts.to, '--to');
+  if (from || to) return { from, to };
+  if (subOpts.all) return {};
+  return { address: addr(subOpts.address, '--address') ?? (await getOwnAddress(cfg, opts.privateKey)) };
+}
+
+function parseBlock(input: string, flag: string): bigint {
+  let value: bigint;
+  try {
+    value = BigInt(input);
+  } catch {
+    throw new Error(`${flag} must be a non-negative integer, got: ${input}`);
+  }
+  if (value < 0n) throw new Error(`${flag} must be a non-negative integer, got: ${input}`);
+  return value;
+}
+
+function formatTransferLine(t: TokenTransfer, info: { symbol: string; decimals: number }): string {
+  return `${t.blockNumber.toString().padStart(12)}  ${t.from} → ${t.to}  ${formatUnits(t.amount, info.decimals)} ${info.symbol}  ${t.transactionHash}`;
 }
 
 function parseGasLimit(input: string | undefined): bigint | undefined {

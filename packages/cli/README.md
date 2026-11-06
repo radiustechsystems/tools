@@ -55,9 +55,16 @@ radius-cli wallet send 0xTo 0.10 RUSD              # native value transfer
 radius-cli wallet send 0xTo 0.10 SBC               # ERC-20 transfer of SBC
 radius-cli wallet send 0xTo 0.10 0xToken           # ERC-20 transfer of any token (decimals read on-chain)
 radius-cli wallet send 0xToken "transfer(address,uint256)" 0xTo 100   # arbitrary call
+radius-cli wallet approve 0xSpender 25 [SBC|0xToken]    # ERC-20 approve; amount "max" for unlimited
+radius-cli wallet allowance 0xSpender [SBC|0xToken] [--owner 0xAddr]
+radius-cli wallet token [SBC|0xToken]              # name, symbol, decimals, total supply
+radius-cli wallet transfers [SBC|0xToken] [--blocks 1000000] [--from 0xA] [--to 0xB] [--address 0xC] [--all]
+radius-cli wallet watch [SBC|0xToken] [--from 0xA] [--to 0xB] [--address 0xC] [--all]   # live, Ctrl-C to stop
 ```
 
-`wallet send` takes the token as its last argument: `RUSD` for a native transfer, `SBC`, or any ERC-20 contract address. Amounts are in display units (`1.5` means 1.5 tokens) and are parsed with the token's decimals — known for SBC, read on-chain for other tokens. ERC-20 sends and `wallet balance` run on the actions of [`radius-sdk/client`](../sdk) (`erc20Actions`, `radiusActions`), so a script and the CLI encode the same calls.
+ERC-20 commands take the token as their last argument: `SBC` (the default) or any contract address (`wallet send` also takes `RUSD` for a native transfer). Amounts are in display units (`1.5` means 1.5 tokens) and are parsed with the token's decimals — known for SBC, read on-chain for other tokens. `wallet send`, `balance`, `approve`, `allowance`, `token`, `transfers` and `watch` run on the actions of [`radius-sdk/client`](../sdk) (`erc20Actions`, `radiusActions`), so a script and the CLI encode the same calls.
+
+`wallet transfers` lists decoded `Transfer` events; `wallet watch` streams them as they land. Both default to transfers sent *or* received by the local account (`--address` for another account, `--from` / `--to` for one side, `--all` for every transfer of the token). `transfers` searches the last 1 000 000 blocks (about 16.7 minutes: Radius block numbers are unix milliseconds) unless `--blocks`, `--from-block` or `--to-block` say otherwise; with `--json`, `watch` prints one JSON object per line.
 
 `wallet balance` prints one line per asset and the total, so each one greps on its own (`radius-cli wallet balance | grep '^SBC:'`):
 
@@ -193,7 +200,11 @@ Per-command JSON shapes:
 | `wallet faucet` | `{address, network, amount, txHash, explorerUrl}` |
 | `wallet verify` | `{address, valid}` (exit 1 when invalid) |
 | `wallet balance` | `{address, totalUsd, sbc, rusd, sbcWei, rusdWei, aggregateWei, rusdSource, sbcError}` |
-| `wallet send` | `{hash, receipt?}` (no `receipt` with `--no-wait`) |
+| `wallet send` / `wallet approve` | `{hash, receipt?}` (no `receipt` with `--no-wait`) |
+| `wallet allowance` | `{token, symbol, decimals, owner, spender, allowance, allowanceWei}` |
+| `wallet token` | `{address, name, symbol, decimals, totalSupply, totalSupplyFormatted}` |
+| `wallet transfers` | `{token, symbol, fromBlock, toBlock, transfers: [{token, symbol, from, to, amount, amountWei, transactionHash, blockNumber, logIndex}]}` |
+| `wallet watch` | one `{token, symbol, from, to, amount, amountWei, transactionHash, blockNumber, logIndex}` per line |
 | `wallet pay` | `{status, headers, body, bodyEncoding, payment}` (`payment.network` is the CAIP-2 network paid on) |
 | `sell check` | `{url, method, ok, status, x402Version, resource, offers, mpp, facilitators, payment?, checks: [{id, status, message}], summary}` (exit 1 when `ok` is false) |
 | `call` | decoded return value (single value or array) |

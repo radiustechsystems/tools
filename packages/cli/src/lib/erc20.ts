@@ -3,10 +3,10 @@
  * A token argument is either the symbol `SBC` (the configured SBC contract, 6 decimals known up
  * front) or any 0x address, whose decimals and symbol the SDK reads on-chain when needed.
  */
-import { formatUnits, isAddress, type Address } from 'viem';
+import { formatUnits, isAddress, maxUint256, type Address, type Hex } from 'viem';
 import { SBC } from 'radius-sdk';
-import type { BalanceClient, BalanceToken, TokenAmount, TokenInput } from 'radius-sdk/client';
-import { getBalances, getAggregateBalance } from 'radius-sdk/client';
+import type { BalanceClient, BalanceToken, TokenAmount, TokenInput, TokenTransfer } from 'radius-sdk/client';
+import { getTokenMetadata, getBalances, getAggregateBalance, getTransfers } from 'radius-sdk/client';
 import { formatUsd } from './format.js';
 import type { ResolvedConfig } from '../types.js';
 
@@ -23,11 +23,21 @@ export function parseTokenArg(cfg: ResolvedConfig, arg: string): TokenInput {
   throw new Error(`Token must be SBC or a 0x contract address, got: ${arg}`);
 }
 
-/** A display amount like `1.5`, parsed with the token's decimals by the SDK. */
+/** A display amount like `1.5` (parsed with the token's decimals by the SDK) or `max` for an unlimited approval. */
 export function parseAmountArg(arg: string): TokenAmount {
   const trimmed = arg.trim();
-  if (!/^\d+(\.\d+)?$/.test(trimmed)) throw new Error(`Amount must be a decimal number like 1.5, got: ${arg}`);
+  if (trimmed.toLowerCase() === 'max') return maxUint256;
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+    throw new Error(`Amount must be a decimal number like 1.5 (or "max" for an unlimited approval), got: ${arg}`);
+  }
   return trimmed;
+}
+
+/** Symbol and decimals of a token argument, read on-chain for a bare address. */
+export async function describeToken(client: BalanceClient, token: TokenInput): Promise<BalanceToken> {
+  if (typeof token !== 'string') return token;
+  const { address, symbol, decimals } = await getTokenMetadata(client, { token });
+  return { address, symbol, decimals };
 }
 
 export interface BalanceReport {
@@ -95,4 +105,71 @@ export function formatBalanceLines(report: BalanceReport): string[] {
     `RUSD:    ${formatUsd(report.rusd)} RUSD`,
     `Total:   ${formatUsd(report.totalUsd)} USD`,
   ];
+}
+
+/** Which side(s) of a `Transfer` to match. From `--from` / `--to`, else both directions of `address`. */
+export interface TransferSides {
+  from?: Address;
+  to?: Address;
+  /** Match transfers sent or received by this address (two queries, merged). */
+  address?: Address;
+}
+
+/** The `{from, to}` filters a side selection expands to: one for explicit sides, two for `address`, one empty for everything. */
+export function transferFilters(sides: TransferSides): { from?: Address; to?: Address }[] {
+  if (sides.from || sides.to) return [{ from: sides.from, to: sides.to }];
+  if (sides.address) return [{ from: sides.address }, { to: sides.address }];
+  return [{}];
+}
+
+export interface TransferRow {
+  token: Address;
+  symbol: string;
+  from: Address;
+  to: Address;
+  amount: string;
+  amountWei: string;
+  transactionHash: Hex;
+  blockNumber: string;
+  logIndex: number;
+}
+
+export function toTransferRow(t: TokenTransfer, token: BalanceToken): TransferRow {
+  return {
+    token: t.token,
+    symbol: token.symbol,
+    from: t.from,
+    to: t.to,
+    amount: formatUnits(t.amount, token.decimals),
+    amountWei: t.amount.toString(),
+    transactionHash: t.transactionHash,
+    blockNumber: t.blockNumber.toString(),
+    logIndex: t.logIndex,
+  };
+}
+
+/** Dedupe (a self-transfer matches both directions) and order by block, then log index. */
+export function sortTransfers(transfers: TokenTransfer[]): TokenTransfer[] {
+  const seen = new Set<string>();
+  const unique = transfers.filter((t) => {
+    const key = `${t.transactionHash}:${t.logIndex}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return unique.sort((a, b) => (a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : a.blockNumber < b.blockNumber ? -1 : 1));
+}
+
+export interface ListTransfersOptions extends TransferSides {
+  token: TokenInput;
+  fromBlock?: bigint;
+  toBlock?: bigint;
+}
+
+/** `Transfer` logs of a token over a block range, one `eth_getLogs` per side filter, merged. */
+export async function listTransfers(client: BalanceClient, opts: ListTransfersOptions): Promise<TokenTransfer[]> {
+  const results = await Promise.all(
+    transferFilters(opts).map((f) => getTransfers(client, { token: opts.token, ...f, fromBlock: opts.fromBlock, toBlock: opts.toBlock })),
+  );
+  return sortTransfers(results.flat());
 }
