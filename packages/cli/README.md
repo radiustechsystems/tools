@@ -58,13 +58,13 @@ radius-cli wallet send 0xToken "transfer(address,uint256)" 0xTo 100   # arbitrar
 radius-cli wallet approve 0xSpender 25 [SBC|0xToken]    # ERC-20 approve; amount "max" for unlimited
 radius-cli wallet allowance 0xSpender [SBC|0xToken] [--owner 0xAddr]
 radius-cli wallet token [SBC|0xToken]              # name, symbol, decimals, total supply
-radius-cli wallet transfers [SBC|0xToken] [--blocks 10000] [--from 0xA] [--to 0xB] [--address 0xC] [--all]
+radius-cli wallet transfers [SBC|0xToken] [--blocks 1000000] [--from 0xA] [--to 0xB] [--address 0xC] [--all]
 radius-cli wallet watch [SBC|0xToken] [--from 0xA] [--to 0xB] [--address 0xC] [--all]   # live, Ctrl-C to stop
 ```
 
 ERC-20 commands take the token as their last argument: `SBC` (the default) or any contract address (`wallet send` also takes `RUSD` for a native transfer). Amounts are in display units (`1.5` means 1.5 tokens) and are parsed with the token's decimals — known for SBC, read on-chain for other tokens. `wallet send`, `balance`, `approve`, `allowance`, `token`, `transfers` and `watch` run on the actions of [`radius-sdk/client`](../sdk) (`erc20Actions`, `radiusActions`), so a script and the CLI encode the same calls.
 
-`wallet transfers` lists decoded `Transfer` events; `wallet watch` streams them as they land. Both default to transfers sent *or* received by the local account (`--address` for another account, `--from` / `--to` for one side, `--all` for every transfer of the token). `transfers` searches the last 10 000 blocks unless `--blocks`, `--from-block` or `--to-block` say otherwise; with `--json`, `watch` prints one JSON object per line.
+`wallet transfers` lists decoded `Transfer` events; `wallet watch` streams them as they land. Both default to transfers sent *or* received by the local account (`--address` for another account, `--from` / `--to` for one side, `--all` for every transfer of the token). `transfers` searches the last 1 000 000 blocks (about 16.7 minutes: Radius block numbers are unix milliseconds) unless `--blocks`, `--from-block` or `--to-block` say otherwise; with `--json`, `watch` prints one JSON object per line.
 
 `wallet balance` prints one line per asset and the total, so each one greps on its own (`radius-cli wallet balance | grep '^SBC:'`):
 

@@ -16,7 +16,7 @@ import { errDetail, jsonStringify } from '../lib/format.js';
 import { registerWalletPay } from './walletPay.js';
 import type { GlobalOptions } from '../types.js';
 import { explorerTxUrl } from 'radius-sdk';
-import { createRadiusFetch, type TokenInput } from 'radius-sdk/client';
+import { createRadiusFetch, MAX_LOG_RANGE, type TokenInput } from 'radius-sdk/client';
 
 const TOKEN_ARG_HELP = 'SBC (default) or any ERC-20 contract address';
 
@@ -468,7 +468,7 @@ export function registerWallet(program: Command): void {
     .option('--to <address>', 'only transfers received by this address')
     .option('--address <address>', 'transfers sent or received by this address (default: local account)')
     .option('--all', 'every transfer of the token, no address filter')
-    .option('--blocks <n>', 'look back this many blocks from the latest (default: 10000)')
+    .option('--blocks <n>', `look back this many blocks from the latest (default: ${MAX_LOG_RANGE}; Radius block numbers are unix milliseconds, so about 16.7 minutes)`)
     .option('--from-block <n>', 'first block to search (overrides --blocks)')
     .option('--to-block <n>', 'last block to search (default: latest)')
     .action(async (tokenArg: string, subOpts: TransferSideOptions & { blocks?: string; fromBlock?: string; toBlock?: string }, cmd) => {
@@ -483,7 +483,7 @@ export function registerWallet(program: Command): void {
       if (subOpts.fromBlock !== undefined) {
         fromBlock = parseBlock(subOpts.fromBlock, '--from-block');
       } else {
-        const lookback = subOpts.blocks !== undefined ? parseBlock(subOpts.blocks, '--blocks') : 10_000n;
+        const lookback = subOpts.blocks !== undefined ? parseBlock(subOpts.blocks, '--blocks') : MAX_LOG_RANGE;
         fromBlock = toBlock > lookback ? toBlock - lookback : 0n;
       }
       if (fromBlock > toBlock) throw new Error(`--from-block ${fromBlock} is after --to-block ${toBlock}`);
