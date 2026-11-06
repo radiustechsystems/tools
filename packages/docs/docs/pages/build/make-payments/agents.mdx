@@ -36,6 +36,8 @@ Skills do not install a payment tool or enforce a spending limit. Configure thos
 
 Both pay in {STABLECOIN} on Radius by default, over x402 or MPP, and refuse an offer above the limit before signing (the CLI with `-y` or without a terminal; otherwise it asks). To also pay USDC on Base, add it with `--networks radius,base` or `networks`.
 
+For usage-based prices, the `upto` scheme, and paying once per interval, see [metered and session payments](/build/metered-payments).
+
 ## Create a project wallet
 
 For the CLI, keep the wallet in the project and select the network explicitly:
@@ -59,6 +61,8 @@ Decide which endpoints the agent may pay, and the most it may pay per request.
 - **In total:** neither per-request limit caps spending across requests. In application code, enforce a total budget or a seller allowlist in `onPaymentRequired`; see [limit what you pay](/build/make-payments#limit-what-you-pay). With the CLI, enforce it in the tool runner that calls the command.
 
 Enforce limits in the component that signs. Account for concurrent requests, and keep the amount spent across restarts. Software with direct access to the key can bypass limits implemented in another client.
+
+For what each tool enforces today, an example budget, and the proposed budgets, allowlists, and top-up, see [agent spend policy](/build/agent-spend-policy).
 
 ## Connect the agent
 
