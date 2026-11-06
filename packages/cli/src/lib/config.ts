@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isAddress, type Address } from 'viem';
 import { radiusMainnetChain, radiusTestnetChain, resolveNetwork, SBC, type PaymentNetwork } from 'radius-sdk';
-import type { GlobalOptions, NetworkName, ResolvedConfig } from '../types.js';
+import type { GlobalOptions, NetworkName, ResolvedConfig, WalletProvider } from '../types.js';
 
 const RADIUS_DIR = process.env.RADIUS_HOME ?? join(homedir(), '.radius');
 const CONFIG_PATH = join(RADIUS_DIR, 'config.json');
@@ -16,6 +16,8 @@ interface FileConfig {
   rusdAddress?: string;
   cachedAddress?: string;
   passwordless?: boolean;
+  /** Account source: 'keystore' (default) or 'proxy' (a wallet proxy; see RADIUS_WALLET_PROXY_URL). */
+  wallet?: WalletProvider;
   /** Networks `wallet pay` pays on, in preference order (default ['radius']). */
   payNetworks?: string[];
   /** RPC URLs for non-Radius networks, by preset id: { "base": "https://…", "base-sepolia": "https://…" }. */
@@ -60,7 +62,13 @@ export function resolveConfig(opts: GlobalOptions): ResolvedConfig {
   const keystorePath = process.env.RADIUS_KEYSTORE_PATH ?? DEFAULT_KEYSTORE_PATH;
   const password = process.env.RADIUS_PASSWORD;
 
-  return { network, chain, rpcUrl, sbcAddress, rusdAddress, keystorePath, password };
+  const walletRaw = process.env.RADIUS_WALLET ?? file.wallet ?? 'keystore';
+  if (walletRaw !== 'keystore' && walletRaw !== 'proxy') {
+    throw new Error(`RADIUS_WALLET must be 'keystore' or 'proxy' (got '${walletRaw}')`);
+  }
+  const wallet = walletRaw as WalletProvider;
+
+  return { network, chain, rpcUrl, sbcAddress, rusdAddress, keystorePath, password, wallet };
 }
 
 /** The configured Radius network (mainnet or testnet) with the `--rpc-url` / `--sbc` overrides applied. */

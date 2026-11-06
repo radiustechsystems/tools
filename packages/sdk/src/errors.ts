@@ -15,6 +15,7 @@ export type RadiusPaymentErrorCode =
   | 'approval_required'
   | 'approval_failed'
   | 'faucet'
+  | 'signer_unavailable'
   | 'config';
 
 export class RadiusPaymentError extends Error {

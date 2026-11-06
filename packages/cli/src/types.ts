@@ -2,6 +2,9 @@ import type { Address, Chain, PublicClient, WalletClient } from 'viem';
 
 export type NetworkName = 'mainnet' | 'testnet';
 
+/** Where the account comes from: the local keystore (default) or a wallet proxy (`RADIUS_WALLET=proxy`). */
+export type WalletProvider = 'keystore' | 'proxy';
+
 export interface ResolvedConfig {
   network: NetworkName;
   chain: Chain;
@@ -10,6 +13,7 @@ export interface ResolvedConfig {
   rusdAddress?: Address;
   keystorePath: string;
   password?: string;
+  wallet: WalletProvider;
 }
 
 export interface GlobalOptions {

@@ -1,4 +1,4 @@
-import { sha256, type Hex, type PrivateKeyAccount } from 'viem';
+import { sha256, type Hex, type LocalAccount } from 'viem';
 
 const b64url = (data: string | Uint8Array) => Buffer.from(data).toString('base64url');
 
@@ -15,8 +15,9 @@ export interface JwtOptions {
  * input, signature as r||s). `iss` defaults to the account address; `iat` and `exp` are set from
  * `now` and `expiresIn` and cannot be overridden by `claims`.
  */
-export async function signJwt(account: PrivateKeyAccount, { claims = {}, expiresIn, now = Math.floor(Date.now() / 1000) }: JwtOptions): Promise<string> {
+export async function signJwt(account: LocalAccount, { claims = {}, expiresIn, now = Math.floor(Date.now() / 1000) }: JwtOptions): Promise<string> {
   if (!Number.isInteger(expiresIn) || expiresIn <= 0) throw new Error('--expires-in must be a positive number of seconds');
+  if (typeof account.sign !== 'function') throw new Error('wallet sign-jwt needs an account that signs raw hashes');
   const header = { alg: 'ES256K', typ: 'JWT' };
   const payload = { iss: account.address, ...claims, iat: now, exp: now + expiresIn };
   const signingInput = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(payload))}`;

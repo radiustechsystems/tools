@@ -70,6 +70,22 @@ Total:   12.345678 USD
 
 `--private-key 0xHEX` overrides the keystore on any command.
 
+### Wallet proxy
+
+`RADIUS_WALLET=proxy` replaces the keystore with a wallet proxy: a service that holds the credentials of a hosted wallet (Privy, Coinbase CDP or Para) and signs on request, so the machine running the CLI never holds a key. The reference proxy is the Cloudflare Worker in [`radius-workshop/wallet-proxy`](https://github.com/radius-workshop/wallet-proxy); the SDK's `proxySigner` (`radius-sdk/signers/proxy`) speaks its API.
+
+```bash
+export RADIUS_WALLET=proxy
+export RADIUS_WALLET_PROXY_URL=https://wallet-proxy.example.workers.dev
+export RADIUS_WALLET_ALIAS=agent0-main
+export RADIUS_WALLET_PROXY_TOKEN=…                 # bearer token, if the proxy uses one
+# or CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET for Cloudflare Access service tokens
+radius-cli wallet address
+radius-cli --network testnet wallet pay get https://api.example.com/r --threshold 0.01 -y
+```
+
+Every account-needing command then signs through the proxy (`wallet pay` asks it only after an offer is accepted; `wallet send` uses its `sign-transaction` endpoint when the proxy's capabilities allow it; `wallet sign-jwt` needs hash signing, which Para wallets lack). `wallet new`, `wallet import`, `wallet password` and `wallet export` refuse, since the proxy neither exports nor replaces its key. `--private-key` still wins. Docs: [Use a wallet proxy](https://docs.radiustech.xyz/build/wallet-proxy).
+
 ## HTTP payments: x402 and MPP (`wallet pay`)
 
 Make an HTTP request and, if the server responds with `402 Payment Required` and an x402 or MPP challenge, pay it from the local wallet and retry. The protocol side is handled by [`radius-sdk`](../sdk) (`createRadiusFetch`), the same code applications and agents use; the CLI adds the wallet, prompts and output.
@@ -212,8 +228,8 @@ Errors continue to go to stderr as `error: <message>` with a non-zero exit code;
 In priority order (highest first):
 
 1. **CLI flag** — `--network`, `--rpc-url`, `--private-key`, `--sbc`, `--rusd`, `--json`
-2. **Environment** — `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_FACILITATOR_API_KEY` (`sell check`), `RADIUS_PASSWORD`, `RADIUS_NEW_PASSWORD` (`wallet password`), `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`
-3. **`~/.radius/config.json`** — fields: `network`, `rpcUrl`, `sbcAddress`, `rusdAddress`, `payNetworks` (e.g. `["radius", "base"]`), `rpcUrls` (`{ "base": …, "base-sepolia": … }`)
+2. **Environment** — `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PAY_NETWORKS`, `RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`, `RADIUS_FACILITATOR_API_KEY` (`sell check`), `RADIUS_PASSWORD`, `RADIUS_NEW_PASSWORD` (`wallet password`), `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`, `RADIUS_WALLET` (`keystore` or `proxy`), `RADIUS_WALLET_PROXY_URL`, `RADIUS_WALLET_ALIAS`, `RADIUS_WALLET_PROXY_TOKEN`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`
+3. **`~/.radius/config.json`** — fields: `network`, `rpcUrl`, `sbcAddress`, `rusdAddress`, `wallet` (`"proxy"`), `payNetworks` (e.g. `["radius", "base"]`), `rpcUrls` (`{ "base": …, "base-sepolia": … }`)
 4. **Built-in defaults** — mainnet
 
 SBC defaults to `0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb`, its address on both mainnet and testnet (taken from `radius-sdk`); set `--sbc` / `RADIUS_SBC_ADDRESS` / `sbcAddress` only for another deployment.

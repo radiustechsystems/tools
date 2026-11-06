@@ -19,14 +19,15 @@ Source, changelog, and examples: [`radiustechsystems/tools/packages/sdk`](https:
 
 Requires Node.js 22 or later, or a runtime with `fetch` such as Cloudflare Workers.
 
-| Entry point         | Exports                                                                                                                                                             | Peer dependency                                           |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `radius-sdk`        | Networks, `SBC`, `USDC_BASE`, price helpers, `getPaymentReceipt`, `RadiusPaymentError`, `radiusEnv`                                                                 | `@x402/core` `^2.27.0`                                    |
-| `radius-sdk/server` | Web-standard `radiusPayments`, `createRadiusServer`, `radiusFacilitators`, `registerRadius`, `assertRadiusSupported`, `proxyTo`, `RequestAdapter`, and server types | `@x402/core` `^2.27.0`                                    |
-| `radius-sdk/hono`   | `radiusPayments`, `proxyTo`, and their types                                                                                                                        | `@x402/core` `^2.27.0`, `hono` `^4`                       |
-| `radius-sdk/client` | `createRadiusFetch`, balance, ERC-20 and Permit2 actions, `getSettlement`, and the receipt and error exports                                                        | `@x402/core` and `@x402/evm` `^2.27.0`, `viem` `^2.48.11` |
+| Entry point                | Exports                                                                                                                                                             | Peer dependency                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `radius-sdk`               | Networks, `SBC`, `USDC_BASE`, price helpers, `getPaymentReceipt`, `RadiusPaymentError`, `radiusEnv`                                                                 | `@x402/core` `^2.27.0`                                    |
+| `radius-sdk/server`        | Web-standard `radiusPayments`, `createRadiusServer`, `radiusFacilitators`, `registerRadius`, `assertRadiusSupported`, `proxyTo`, `RequestAdapter`, and server types | `@x402/core` `^2.27.0`                                    |
+| `radius-sdk/hono`          | `radiusPayments`, `proxyTo`, and their types                                                                                                                        | `@x402/core` `^2.27.0`, `hono` `^4`                       |
+| `radius-sdk/client`        | `createRadiusFetch`, balance, ERC-20 and Permit2 actions, `getSettlement`, and the receipt and error exports                                                        | `@x402/core` and `@x402/evm` `^2.27.0`, `viem` `^2.48.11` |
+| `radius-sdk/signers/proxy` | `proxySigner` and `proxySignerEnv`: a `signer` backed by a [wallet proxy](/build/wallet-proxy) (from `0.8.0`)                                                       | `viem` `^2.48.11`                                         |
 
-`@x402/core` is a required peer dependency: install it yourself (`pnpm add radius-sdk @x402/core`), and keep any upstream `@x402/*` adapters on the same version, so the SDK and your app share one copy. `@x402/evm` and viem are needed only for `radius-sdk/client`, and Hono only for `radius-sdk/hono`. The root, server, and Hono entry points do not load viem at runtime.
+`@x402/core` is a required peer dependency: install it yourself (`pnpm add radius-sdk @x402/core`), and keep any upstream `@x402/*` adapters on the same version, so the SDK and your app share one copy. `@x402/evm` and viem are needed only for `radius-sdk/client` and `radius-sdk/signers/proxy`, and Hono only for `radius-sdk/hono`. The root, server, and Hono entry points do not load viem at runtime.
 
 ## radiusPayments
 
@@ -180,7 +181,7 @@ const payFetch = createRadiusFetch({ network: 'testnet', signer: process.env.RAD
 
 | Option               | Type                                         | Default            | Description                                                                                                                                                                  |
 | -------------------- | -------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `signer`             | private key, viem account, or `WalletClient` | Required           | Signs payments; sending transactions needs a key, a local account, or a `WalletClient`                                                                                       |
+| `signer`             | private key, viem account, or `WalletClient` | Required           | Signs payments; also a [proxy signer](#proxy-signer). Sending transactions needs a key, a local account, or a `WalletClient`                                                 |
 | `maxPerRequest`      | `Price`                                      | Required           | Ceiling for each payment; not a cumulative budget                                                                                                                            |
 | `network`            | A preset ID or a `PaymentNetwork`            | `'mainnet'`        | Payments are made only on this network                                                                                                                                       |
 | `networks`           | Array of networks                            | —                  | Instead of `network`: pay on any of these, preferring them in order                                                                                                          |
@@ -258,6 +259,31 @@ The returned function also has these members. The wallet helpers act on the firs
 | `client`                   | The underlying `@x402/core` client                                                        |
 
 Members that send a transaction return a `TxResult`: `hash`, `status` (`'success'` or `'reverted'` from the receipt), and `explorerUrl`.
+
+### Proxy signer
+
+`proxySigner(options)` from `radius-sdk/signers/proxy` returns a `signer` whose signatures come from a [wallet proxy](/build/wallet-proxy), a service that holds hosted-wallet credentials and signs on request, so the process that pays holds no key. It is asynchronous: it looks the wallet's address up once, unless `address` is given.
+
+```typescript
+import { createRadiusFetch } from 'radius-sdk/client';
+import { proxySigner, proxySignerEnv } from 'radius-sdk/signers/proxy';
+
+const signer = await proxySigner({ url: 'https://wallet-proxy.example.workers.dev', alias: 'agent0-main', token: process.env.RADIUS_WALLET_PROXY_TOKEN });
+// or, from RADIUS_WALLET_PROXY_URL, RADIUS_WALLET_ALIAS, RADIUS_WALLET_PROXY_TOKEN and CF_ACCESS_CLIENT_*:
+// const signer = await proxySigner(proxySignerEnv(process.env));
+const payFetch = createRadiusFetch({ network: 'testnet', signer, maxPerRequest: '0.01 SBC' });
+```
+
+| Option    | Description                                                                         |
+| --------- | ----------------------------------------------------------------------------------- |
+| `url`     | The proxy's base URL                                                                |
+| `alias`   | The wallet alias the proxy maps to a provider wallet                                |
+| `token`   | Bearer token, sent as `Authorization`                                               |
+| `headers` | Extra headers on every request, for example Cloudflare Access service-token headers |
+| `address` | The wallet's address, when known: skips the lookup                                  |
+| `fetch`   | Underlying fetch                                                                    |
+
+The signer has `address`, `signTypedData` (what payments use), `signMessage` (the faucet challenge), `signHash`, `signTransaction` (a signed, serialized transaction, when the proxy's `capabilities()` allow it), and `capabilities()`. The proxy is asked to sign only after an offer has passed `maxPerRequest` and `onPaymentRequired`. A proxy that cannot be reached, refuses the request, or returns no signature throws `signer_unavailable` with the proxy's `status`, `code`, and `message` in `details`.
 
 ## Receipts
 
@@ -417,6 +443,7 @@ Payment failures throw `RadiusPaymentError` with a `code` and, for some codes, `
 | `approval_required`           | A Permit2 approval is needed and `permit2Approval` is `'never'`                                               |
 | `approval_failed`             | The approval transaction reverted                                                                             |
 | `faucet`                      | `fund()` failed                                                                                               |
+| `signer_unavailable`          | A [proxy signer](#proxy-signer) could not reach its wallet proxy or get a signature from it                   |
 | `config`                      | The options are invalid, for example a missing `maxPerRequest`                                                |
 
 ## Networks
