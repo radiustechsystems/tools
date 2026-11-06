@@ -2,8 +2,8 @@
 // only the paths in `assets.run_worker_first` (wrangler.jsonc) reach this code:
 // - /api/try/*: the backend for the interactive "Try Radius" components, a faucet proxy and a priced
 //   route (/api/try/hello) that the Radius Platform policy of RADIUS_PROJECT_ID charges for.
-// - Pages and agent-facing files (Markdown twins, llms.txt, skills, robots.txt, sitemaps): served from
-//   static assets, with Markdown for requests that prefer it, recording agent requests in Workers Logs
+// - Pages and agent-facing files (Markdown twins, llms.txt, skills and their discovery index, robots.txt,
+//   sitemaps): served from static assets, with Markdown for requests that prefer it, recording agent requests in Workers Logs
 //   and Analytics Engine. Scripts, styles and images stay asset-first. Agent requests first pass the
 //   Radius Platform policy of RADIUS_PROJECT_ID, which allows, denies, rate-limits or charges them.
 import { Hono } from 'hono';
@@ -56,7 +56,8 @@ app.get('/api/try/hello', (c) => c.json({ message: 'Hello, world!' }));
 app.notFound((c) => c.json({ error: 'not found' }, 404));
 
 // Files written for agents and feed readers.
-const AGENT_FILE = /\.md$|^\/(?:llms\.txt|llms-full\.txt|robots\.txt|sitemap\.xml|sitemap\.txt|release-notes\.xml)$/;
+const AGENT_FILE =
+  /\.md$|^\/(?:llms\.txt|llms-full\.txt|robots\.txt|sitemap\.xml|sitemap\.txt|release-notes\.xml|\.well-known\/agent-skills\/index\.json)$/;
 
 // A page URL: no file extension in the last segment (`/`, `/build/`, `/build/x402`).
 const PAGE = /(?:^|\/)[^/.]*$/;

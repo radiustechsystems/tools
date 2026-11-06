@@ -17,6 +17,11 @@
  * Output lands in public/skills/<skill-name>.md so Vite serves
  * each as a static asset in dev and copies them to dist/public/ at build time.
  *
+ * It also writes public/.well-known/agent-skills/index.json, the Agent Skills Discovery index
+ * (v0.2.0, https://github.com/cloudflare/agent-skills-discovery-rfc): one `skill-md` entry per skill,
+ * with the raw GitHub URL of its SKILL.md and the SHA-256 of that file's bytes, so the digests
+ * always match the SKILL.md files the build read.
+ *
  * Usage:
  *   npx tsx scripts/generate-skills-md.ts
  *
@@ -29,8 +34,9 @@
  *   Progressive disclosure: metadata (~100 tokens) → instructions (<5000 tokens) → resources (as needed)
  */
 
+import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join, dirname, relative, resolve, basename } from 'node:path';
+import { join, dirname, relative, resolve, basename, sep } from 'node:path';
 import { parse } from 'yaml';
 
 // ---------------------------------------------------------------------------
@@ -53,6 +59,15 @@ const SKILLS_OUTPUT_BASE = join(PUBLIC_DIR, 'skills');
 
 /** Canonical GitHub URL for the repo holding the skills */
 const SKILLS_REPO_URL = 'https://github.com/radiustechsystems/tools';
+
+/** Raw file base for the skills repo's main branch: index URLs point here. */
+const SKILLS_RAW_URL = 'https://raw.githubusercontent.com/radiustechsystems/tools/main';
+
+/** Agent Skills Discovery index, served at /.well-known/agent-skills/index.json */
+const AGENT_SKILLS_INDEX_PATH = join(PUBLIC_DIR, '.well-known', 'agent-skills', 'index.json');
+
+/** Schema URI of the Agent Skills Discovery index format (RFC v0.2.0). */
+const AGENT_SKILLS_SCHEMA = 'https://schemas.agentskills.io/discovery/0.2.0/schema.json';
 
 // ---------------------------------------------------------------------------
 // Marketplace manifest (read from .claude-plugin/marketplace.json)
@@ -429,6 +444,46 @@ function processSkill(plugin: MarketplacePlugin, skillName: string, skillRoot: s
 }
 
 // ---------------------------------------------------------------------------
+// Agent Skills Discovery index (/.well-known/agent-skills/index.json)
+// ---------------------------------------------------------------------------
+
+interface AgentSkillsIndexEntry {
+  name: string;
+  type: 'skill-md';
+  description: string;
+  url: string;
+  digest: string;
+}
+
+/**
+ * Index entry for one skill: `url` is the raw GitHub URL of its SKILL.md (path relative to the repo
+ * root, so it follows the marketplace plugin's `source`), `digest` the SHA-256 of that file's bytes.
+ */
+function agentSkillsIndexEntry(skillName: string, skillRoot: string): AgentSkillsIndexEntry {
+  const skillMd = join(skillRoot, 'SKILL.md');
+  const repoPath = relative(SKILLS_SOURCE_DIR, skillMd).split(sep).join('/');
+  return {
+    name: skillName,
+    type: 'skill-md',
+    description: readSkillDescription(skillName, skillRoot),
+    url: `${SKILLS_RAW_URL}/${repoPath}`,
+    digest: `sha256:${createHash('sha256').update(readFileSync(skillMd)).digest('hex')}`,
+  };
+}
+
+/** Write the index: skills sorted by name, fixed key order and a trailing newline, so builds are reproducible. */
+function writeAgentSkillsIndex(entries: AgentSkillsIndexEntry[]): void {
+  const names = entries.map((entry) => entry.name);
+  const duplicate = names.find((name, i) => names.indexOf(name) !== i);
+  if (duplicate) throw new Error(`Skill ${duplicate} appears in more than one plugin`);
+  const skills = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const index = { $schema: AGENT_SKILLS_SCHEMA, skills };
+  mkdirSync(dirname(AGENT_SKILLS_INDEX_PATH), { recursive: true });
+  writeFileSync(AGENT_SKILLS_INDEX_PATH, JSON.stringify(index, null, 2) + '\n', 'utf-8');
+  console.log(`  ✓  .well-known/agent-skills/index.json (${skills.length} skill${skills.length !== 1 ? 's' : ''})`);
+}
+
+// ---------------------------------------------------------------------------
 // Main script entry
 // ---------------------------------------------------------------------------
 
@@ -449,6 +504,7 @@ function main(): void {
 
     let totalSkills = 0;
     let totalSections = 0;
+    const indexEntries: AgentSkillsIndexEntry[] = [];
 
     for (const plugin of manifest.plugins) {
       for (const { name, root, plugin: skillPlugin } of resolvePluginSkills(plugin)) {
@@ -456,8 +512,12 @@ function main(): void {
         const sections = processSkill(skillPlugin, name, root);
         totalSkills++;
         totalSections += sections;
+        indexEntries.push(agentSkillsIndexEntry(name, root));
       }
     }
+
+    console.log('');
+    writeAgentSkillsIndex(indexEntries);
 
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
 
