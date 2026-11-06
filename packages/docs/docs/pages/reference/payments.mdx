@@ -1,0 +1,101 @@
+---
+title: Supported schemes and transports
+description: Which x402 and MPP schemes, transfer methods, networks, transports, seller frameworks, and buyer tools radius-sdk and radius-cli support today, and which are planned.
+---
+
+import { MAINNET_NAME, TESTNET_NAME, MAINNET_CAIP2, TESTNET_CAIP2, STABLECOIN } from '../../constants';
+
+# Supported schemes and transports [What radius-sdk and radius-cli support today, and what is planned]
+
+This page describes `radius-sdk` 0.7.1 and `radius-cli` 0.7.1. Each entry has one of three statuses:
+
+- **Supported:** the published packages do this today.
+- **Planned:** the work is tracked but not released. No date is promised.
+- **Not supported:** nothing in the packages does this, and the page names any workaround.
+
+For how a payment flows, see [x402 payments](/build/x402). For options and error codes, see the [radius-sdk reference](/reference/radius-sdk) and the [radius-cli reference](/reference/radius-cli).
+
+## Protocols
+
+| Protocol                                       | Buyer side              | Seller side                         | Notes                                                                                                                                                         |
+| ---------------------------------------------- | ----------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| x402 v2                                        | Supported               | Supported                           | The default. Challenge in `PAYMENT-REQUIRED`, payment in `PAYMENT-SIGNATURE`, receipt in `PAYMENT-RESPONSE`                                                   |
+| x402 v1                                        | Supported, `exact` only | Not supported                       | Buyers read a v1 challenge from the JSON body and pay in `X-PAYMENT`. Sellers issue v2 challenges only                                                        |
+| [MPP](/reference/radius-sdk#mpp), `evm` charge | Supported               | Supported with `mpp: { secretKey }` | One method: an EIP-3009 authorization settled through the x402 facilitator. Only `radiusPayments` serves MPP; the upstream `@x402/*` adapters serve x402 only |
+| MPP, other methods such as Tempo               | Not supported           | Not supported                       | `createRadiusFetch` rejects them with `no_compatible_offer`                                                                                                   |
+
+## Schemes
+
+| Scheme                              | Buyer side                | Seller side   | Notes                                                                                                                                                                                                             |
+| ----------------------------------- | ------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exact`                             | Supported, x402 v1 and v2 | Supported     | A fixed price per request. The only scheme `radiusPayments` and `createRadiusServer` offer                                                                                                                        |
+| `upto`                              | Supported, x402 v2        | Planned       | The buyer signs a Permit2 authorization for a maximum and the facilitator charges what was used. The Radius facilitator does not list `upto` yet, so buyer support is unit-tested only. Seller support is tracked |
+| Sessions, streams, payment channels | Not supported             | Not supported | There is no session, metering, or channel primitive. Each payment is one HTTP request; see [streaming payments](/build/examples/streaming-payments) for the per-interval pattern                                  |
+
+## Transfer methods
+
+| Method                                                 | Buyer side                                                   | Seller side                                             | Notes                                                                                                                                                       |
+| ------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| EIP-3009 `transferWithAuthorization`                   | Supported: x402 `exact` (v1 and v2) and MPP                  | Supported                                               | No approval and no gas for the payer. A seller's `exact` offer uses the method its facilitator lists first for the network, and EIP-3009 when it lists none |
+| Permit2 `permitWitnessTransferFrom`                    | Supported: x402 v2 `exact` and `upto`                        | Supported when the facilitator lists Permit2 first      | Needs a one-time {STABLECOIN} or USDC allowance for the Permit2 contract. Each payment is a separate signature capped to its amount                         |
+| EIP-2612 gas sponsoring (`eip2612GasSponsoring`)       | Supported                                                    | Declared automatically when the facilitator supports it | Covers the Permit2 allowance: the payer signs a permit with the payment, so no approval transaction is sent. Set `gasSponsoring` to change it               |
+| Raw approval sponsoring (`erc20ApprovalGasSponsoring`) | Supported, behind `permit2Approval` and `onApprovalRequired` | Not declared by `radius-sdk`                            | Treated as an unlimited approval, so it passes the same approval gate as an unsponsored one                                                                 |
+| Other methods, such as Stablecoin.xyz `erc2612`        | Not supported                                                | Not supported                                           | Refused before signing with `unsupported_transfer_method`                                                                                                   |
+
+## Networks
+
+| Network          | CAIP-2                       | Asset                    | `radius-sdk` buyer                    | `radius-sdk` seller                                              | `radius-cli`                                              | Default facilitator                                           |
+| ---------------- | ---------------------------- | ------------------------ | ------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------- |
+| {MAINNET_NAME}   | <code>{MAINNET_CAIP2}</code> | {STABLECOIN}             | Supported, the default                | Supported, the default                                           | Supported, the default                                    | Radius facilitator                                            |
+| {TESTNET_NAME}   | <code>{TESTNET_CAIP2}</code> | {STABLECOIN}             | Supported                             | Supported                                                        | Supported with `--network testnet`                        | Radius testnet facilitator                                    |
+| Base             | `eip155:8453`                | USDC                     | Supported                             | Supported with a facilitator you name                            | Supported with `--networks radius,base`                   | None. Settlement on Base by the Radius facilitator is planned |
+| Base Sepolia     | `eip155:84532`               | USDC                     | Supported                             | Supported                                                        | Supported with `--network testnet --networks radius,base` | x402.org                                                      |
+| Other EVM chains | `eip155:<id>`                | Any ERC-20 you configure | Supported with `definePaymentNetwork` | Supported with `definePaymentNetwork` and a facilitator you name | Not supported                                             | None                                                          |
+| Non-EVM chains   | —                            | —                        | Not supported                         | Not supported                                                    | Not supported                                             | —                                                             |
+
+A buyer or seller can list several networks; see [several networks](/reference/radius-sdk#several-networks).
+
+## Transports
+
+| Transport                                       | Status        | Notes                                                                                                                                                                                                                                          |
+| ----------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HTTP request and response                       | Supported     | Every payment is one request: the server answers `402`, the client pays and retries. Any HTTP method                                                                                                                                           |
+| Streaming response bodies (SSE, chunked output) | Supported     | With `settle: 'before'` (the default) the seller handlers pass the body through unbuffered, and `createRadiusFetch` returns it unread. One payment covers the whole response. `settle: 'after'` and `radius-cli wallet pay` read the full body |
+| Per-chunk or per-message pricing                | Not supported | A stream cannot be charged per chunk or per message. Pricing stream and WebSocket messages and MCP tool calls is tracked as planned work                                                                                                       |
+| WebSocket                                       | Not supported | The payment handlers do not handle connection upgrades. Charge for an HTTP route the client calls alongside the connection                                                                                                                     |
+| MCP                                             | Not supported | There is no payment over the MCP protocol itself. An MCP server or tool can call a paid HTTP API with `createRadiusFetch`                                                                                                                      |
+| A2A                                             | Not supported | An agent can pay HTTP endpoints with `createRadiusFetch` or `radius-cli wallet pay`                                                                                                                                                            |
+
+See [stream a paid response](/build/accept-payments#stream-a-paid-response) for the settlement trade-offs.
+
+## Seller frameworks
+
+| Framework                                                                         | How                                                                                                                   | Protocols                                               | Status    |
+| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | --------- |
+| Web-standard `Request`/`Response`: Cloudflare Workers, Bun, Deno, Node, SvelteKit | [`radiusPayments`](/reference/radius-sdk#radiuspayments) from `radius-sdk/server`                                     | x402, MPP                                               | Supported |
+| Hono                                                                              | `radiusPayments` from `radius-sdk/hono`                                                                               | x402, MPP                                               | Supported |
+| Next.js                                                                           | `radiusPayments` in route handlers or middleware, or `createRadiusServer` with `@x402/next` (Next.js 16.2.6 or later) | x402, MPP with `radiusPayments`; x402 with `@x402/next` | Supported |
+| Astro                                                                             | `radiusPayments` in API routes or middleware                                                                          | x402, MPP                                               | Supported |
+| Express                                                                           | [`createRadiusServer`](/reference/radius-sdk#createradiusserver) with `@x402/express`                                 | x402                                                    | Supported |
+| An x402 server you already run                                                    | [`registerRadius`](/reference/radius-sdk#add-radius-to-an-existing-x402-server)                                       | x402                                                    | Supported |
+| An origin you do not change                                                       | `radiusPayments` with [`proxyTo`](/reference/radius-sdk#proxy-to-an-origin)                                           | x402, MPP                                               | Supported |
+
+Runnable sellers for Workers, Hono, Express, and Astro are listed under [examples](/reference/radius-sdk#examples).
+
+## Buyer tools
+
+| Tool                                                              | Protocols                  | Schemes         | Networks                       | Spending limits                                                                                                                             |
+| ----------------------------------------------------------------- | -------------------------- | --------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`createRadiusFetch`](/build/make-payments) (`radius-sdk/client`) | x402 v1 and v2, MPP        | `exact`, `upto` | Radius, Base, any EVM chain    | `maxPerRequest` (required) caps each payment. A total budget is your code, in `onPaymentRequired`                                           |
+| [`radius-cli wallet pay`](/reference/radius-cli)                  | x402 v1 and v2, MPP        | `exact`, `upto` | Radius and Base, with testnets | `--threshold` caps each payment; above it the CLI prompts or refuses                                                                        |
+| Agent skills (`x402`, `sell-api`, `radius-dev`)                   | Same as the tools they use | Same            | Same                           | The [skills](/build/coding-assistants) teach agents to use `createRadiusFetch`, `radius-cli` and `radiusPayments`; they add no payment code |
+
+Neither tool keeps a budget across requests; a running total belongs in `onPaymentRequired` or in the agent that calls `radius-cli`. See [limit what you pay](/build/make-payments#limit-what-you-pay).
+
+## Related pages
+
+- [x402 payments](/build/x402)
+- [Accept payments](/build/accept-payments)
+- [Make payments](/build/make-payments)
+- [radius-sdk reference](/reference/radius-sdk)
+- [radius-cli reference](/reference/radius-cli)
