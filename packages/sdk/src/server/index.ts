@@ -11,16 +11,20 @@ import {
   type RouteConfig,
   type RoutesConfig,
 } from '@x402/core/server';
-import type { SettleResponse } from '@x402/core/types';
+import { decodePaymentResponseHeader } from '@x402/core/http';
+import { SettleError, type PaymentPayload, type PaymentRequirements, type SettleResponse } from '@x402/core/types';
 import { resolveNetwork, explorerTxUrl, isNetworkId, overridesOf, type Address, type NetworkInput, type NetworkOverrides, type PaymentNetwork } from '../networks.js';
 import { resolvePrice, type Price } from '../amounts.js';
-import type { ChargeEvidence, PaymentReceipt } from '../receipt.js';
-import { RadiusFacilitatorClient, withUnknownOutcomes, type FacilitatorOptions } from './facilitator.js';
+import { PAYMENT_RESPONSE_HEADER, type ChargeEvidence, type PaymentReceipt } from '../receipt.js';
+import { SETTLEMENT_UNKNOWN_REASON, classifySettlement, type SettleResponseLike, type SettlementClassifier, type SettlementStatus } from '../outcome.js';
+import { RadiusFacilitatorClient, SettlementUnknownError, withUnknownOutcomes, type FacilitatorOptions } from './facilitator.js';
 import { RadiusExactScheme, type GasSponsoringMode, type SettleMode } from './scheme.js';
 import { requestContext, requestOf } from './adapter.js';
-import { MPP_RECEIPT_HEADER, MppPayments, type MppServerOptions } from './mpp.js';
+import { MPP_RECEIPT_HEADER, MppPayments, type MppServerOptions, type MppVerification } from './mpp.js';
 
-export { RadiusFacilitatorClient, staticSupported, withUnknownOutcomes, type FacilitatorOptions } from './facilitator.js';
+export { RadiusFacilitatorClient, SettlementUnknownError, staticSupported, withUnknownOutcomes, type FacilitatorOptions } from './facilitator.js';
+export { SETTLEMENT_PENDING_REASON, SETTLEMENT_UNKNOWN_REASON, classifySettlement, isTerminalSettlement } from '../outcome.js';
+export type { SettlementStatus, SettlementClassifier, SettleResponseLike } from '../outcome.js';
 export { RadiusExactScheme, type GasSponsoringMode, type SettleMode } from './scheme.js';
 export { RequestAdapter, requestContext, requestOf } from './adapter.js';
 export { MppPayments, type MppServerOptions } from './mpp.js';
@@ -110,6 +114,43 @@ export interface RadiusServerOptions extends NetworkOverrides {
    * separately so a paid 5xx (or an uncertain 502) can be reconciled before the buyer pays again.
    */
   onSettled?: (receipt: PaymentReceipt, context: HTTPRequestContext | undefined) => void | Promise<void>;
+  /**
+   * Called once per settlement attempt with its outcome, whichever adapter served the request:
+   * `settled` (alongside `onSettled`), `pending`, `unknown`, `rejected` or `failed`. Use it to keep
+   * pending and unknown payments for reconciliation. Errors thrown here are logged, not surfaced.
+   */
+  onSettlement?: (outcome: SettlementOutcome, context: HTTPRequestContext | undefined) => void | Promise<void>;
+  /**
+   * Maps the facilitator's settle response to a `SettlementStatus`; default `classifySettlement`
+   * (`errorReason: 'settlement_pending'` is pending). Replace it if your facilitator signals a
+   * pending settlement differently. Settle calls with no facilitator answer are always `unknown`.
+   */
+  classifySettlement?: SettlementClassifier;
+  /** Seconds sent in `Retry-After` with a pending (`503`) or unknown (`502`) settlement. Default 2. */
+  settlementRetryAfter?: number;
+}
+
+/**
+ * One settlement attempt as the seller saw it. `status` follows `SettlementStatus`.
+ *
+ * `payment` is the buyer's signed authorization and the requirement it pays. It is bearer-like:
+ * whoever holds it can submit it for settlement until it expires. Store it like a secret (for
+ * example to reconcile a pending or unknown outcome), never log it, and delete it once the outcome
+ * is final.
+ */
+export interface SettlementOutcome {
+  status: SettlementStatus;
+  /**
+   * The settle result as a receipt (`charge.evidence` is `pending` for a pending result). For an
+   * `unknown` outcome without a facilitator answer: `success: false`, `errorReason:
+   * 'settlement_unknown'`, and no transaction.
+   */
+  receipt: PaymentReceipt;
+  /** Whether settlement ran before or after the application handler. */
+  phase: 'before-handler' | 'after-handler';
+  payment: { payload: PaymentPayload; requirements: PaymentRequirements };
+  /** The error x402 core reported, for a failed settle call. */
+  error?: unknown;
 }
 
 const GAS_SPONSORING_DECLARATION = {
@@ -188,6 +229,17 @@ function configureNetworks(options: Pick<RadiusServerOptions, 'network' | 'netwo
   return configured;
 }
 
+/** The settle response inside a failed settle call: a `SettleError`, or a response object itself. */
+function settleResponseOf(error: unknown): (SettleResponseLike & Partial<SettleResponse>) | undefined {
+  if (error instanceof SettleError) {
+    return { success: false, errorReason: error.errorReason, errorMessage: error.errorMessage, transaction: error.transaction ?? '', network: error.network ?? '', payer: error.payer };
+  }
+  if (typeof error === 'object' && error !== null && typeof (error as SettleResponseLike).success === 'boolean' && !(error instanceof Error)) {
+    return error as SettleResponseLike & Partial<SettleResponse>;
+  }
+  return undefined;
+}
+
 function isServerNetwork(v: unknown): v is ServerNetwork {
   return typeof v === 'object' && v !== null && 'network' in v && !('chain' in v);
 }
@@ -197,12 +249,17 @@ function isServerNetwork(v: unknown): v is ServerNetwork {
  * protocol response leaves out: the asset and its decimals, and `charge`, which keeps the offered
  * amount apart from the charge the facilitator reported.
  */
-export function toReceipt(r: SettleResponse, network: PaymentNetwork, requirements: { amount: string; scheme?: string; asset?: string }): PaymentReceipt {
+export function toReceipt(
+  r: SettleResponse,
+  network: PaymentNetwork,
+  requirements: { amount: string; scheme?: string; asset?: string },
+  classify: SettlementClassifier = classifySettlement,
+): PaymentReceipt {
   const transaction = r.transaction && r.transaction.length > 0 ? r.transaction : undefined;
   const scheme = requirements.scheme === 'upto' ? 'upto' : 'exact';
   const reported = typeof r.amount === 'string' ? r.amount : undefined;
   const evidence: ChargeEvidence = !r.success
-    ? 'failed'
+    ? classify(r) === 'pending' ? 'pending' : 'failed'
     : reported === undefined
       ? scheme === 'exact' ? 'implied' : 'incomplete'
       : scheme === 'upto' && /^0+$/.test(reported) ? 'zero' : 'reported';
@@ -252,8 +309,13 @@ export class RadiusServer {
   readonly mpp?: MppPayments;
   /** Settle 'before' or 'after' the handler. */
   readonly settleMode: SettleMode;
+  /** Maps settle responses to a `SettlementStatus` (`RadiusServerOptions.classifySettlement`). */
+  readonly classifySettlement: SettlementClassifier;
+  /** `Retry-After` seconds for pending and unknown settlements. */
+  readonly settlementRetryAfter: number;
   private readonly facilitators: ReadonlyMap<PaymentNetwork, FacilitatorClient>;
   private readonly settledHooks: NonNullable<RadiusServerOptions['onSettled']>[] = [];
+  private readonly settlementHooks: NonNullable<RadiusServerOptions['onSettlement']>[] = [];
 
   constructor(options: RadiusServerOptions = {}) {
     const supportedFailures = (this.supportedFailures = new Map());
@@ -268,7 +330,12 @@ export class RadiusServer {
     if (options.mpp) this.mpp = new MppPayments(this, options.mpp);
     this.server = new x402ResourceServer(configured.map((c) => c.facilitator));
     for (const { network, scheme } of configured) this.server.register(network.network, scheme);
+    this.classifySettlement = options.classifySettlement ?? classifySettlement;
+    const retryAfter = options.settlementRetryAfter ?? 2;
+    if (!Number.isFinite(retryAfter) || retryAfter < 0) throw new Error('radius-sdk: settlementRetryAfter must be a non-negative number of seconds');
+    this.settlementRetryAfter = Math.ceil(retryAfter);
     if (options.onSettled) this.onSettled(options.onSettled);
+    if (options.onSettlement) this.onSettlement(options.onSettlement);
   }
 
   /** Why some networks' facilitators could not be reached for `/supported`, if any did not answer. @internal */
@@ -294,6 +361,61 @@ export class RadiusServer {
     }
     this.settledHooks.push(hook);
     return this;
+  }
+
+  /**
+   * Register a listener for every settlement attempt's outcome (see `RadiusServerOptions.onSettlement`).
+   * Fed by x402 core's settle hooks, so it also fires under upstream adapters (`@x402/express`).
+   */
+  onSettlement(hook: NonNullable<RadiusServerOptions['onSettlement']>): this {
+    if (this.settlementHooks.length === 0) {
+      const transportOf = (ctx: { transportContext?: unknown }) => (ctx.transportContext as { request?: HTTPRequestContext } | undefined)?.request;
+      const paymentOf = (ctx: { paymentPayload: unknown; requirements: unknown }) => ({
+        payload: ctx.paymentPayload as PaymentPayload,
+        requirements: ctx.requirements as PaymentRequirements,
+      });
+      this.server.onAfterSettle(async (ctx) => {
+        if (ctx.phase === 'cancel' || !ctx.result.success) return;
+        const requirements = ctx.requirements as PaymentRequirements;
+        const receipt = toReceipt(ctx.result as SettleResponse, this.networkFor(requirements.network), requirements, this.classifySettlement);
+        await this.notifySettlement({ status: 'settled', receipt, phase: ctx.phase, payment: paymentOf(ctx) }, transportOf(ctx));
+      });
+      this.server.onSettleFailure(async (ctx) => {
+        if (ctx.phase === 'cancel') return;
+        const requirements = ctx.requirements as PaymentRequirements;
+        const outcome = this.settlementOutcome(ctx.error, requirements, ctx.phase);
+        await this.notifySettlement({ ...outcome, payment: paymentOf(ctx), error: ctx.error }, transportOf(ctx));
+      });
+    }
+    this.settlementHooks.push(hook);
+    return this;
+  }
+
+  /**
+   * Classify a failed settle call: x402 core reports a settle response with `success: false`, or the
+   * facilitator's own rejection, as a `SettleError`; anything else had no facilitator answer. @internal
+   */
+  settlementOutcome(error: unknown, requirements: PaymentRequirements, phase: SettlementOutcome['phase']): Pick<SettlementOutcome, 'status' | 'receipt' | 'phase'> {
+    const network = this.networkFor(requirements.network);
+    const settle = settleResponseOf(error);
+    if (settle) {
+      const response = { ...settle, network: settle.network || requirements.network } as SettleResponse;
+      return { status: this.classifySettlement(response), receipt: toReceipt(response, network, requirements, this.classifySettlement), phase };
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    const unknown = { success: false, errorReason: SETTLEMENT_UNKNOWN_REASON, errorMessage: message, transaction: '', network: requirements.network } as SettleResponse;
+    return { status: 'unknown', receipt: toReceipt(unknown, network, requirements, this.classifySettlement), phase };
+  }
+
+  /** Run every outcome listener, each isolated. @internal */
+  async notifySettlement(outcome: SettlementOutcome, context: HTTPRequestContext | undefined): Promise<void> {
+    for (const hook of this.settlementHooks) {
+      try {
+        await hook(outcome, context);
+      } catch (e) {
+        console.error('radius-sdk onSettlement hook failed:', e);
+      }
+    }
   }
 
   /** Run every settlement listener, each isolated: one that throws is logged and the rest still run. @internal */
@@ -437,9 +559,11 @@ export interface PaymentHandler {
   readonly radius: RadiusServer;
 }
 
-export interface RadiusPaymentsOptions extends Omit<RadiusServerOptions, 'onSettled'>, RoutesOptions<Request> {
+export interface RadiusPaymentsOptions extends Omit<RadiusServerOptions, 'onSettled' | 'onSettlement'>, RoutesOptions<Request> {
   /** Called once per settled payment with the `Request` that paid. */
   onSettled?: (receipt: PaymentReceipt, request: Request) => void | Promise<void>;
+  /** Called once per settlement attempt with its outcome and the `Request` (see `RadiusServerOptions.onSettlement`). */
+  onSettlement?: (outcome: SettlementOutcome, request: Request) => void | Promise<void>;
 }
 
 /**
@@ -456,10 +580,11 @@ export interface RadiusPaymentsOptions extends Omit<RadiusServerOptions, 'onSett
  * the facilitator, and get a `PAYMENT-RESPONSE` header back.
  */
 export function radiusPayments(options: RadiusPaymentsOptions): PaymentHandler {
-  const { payTo, routes, onSettled, ...serverOptions } = options;
+  const { payTo, routes, onSettled, onSettlement, ...serverOptions } = options;
   const radius = new RadiusServer({
     ...serverOptions,
     onSettled: onSettled && ((receipt, ctx) => onSettled(receipt, requestOf(ctx) ?? missingRequest())),
+    onSettlement: onSettlement && ((outcome, ctx) => onSettlement(outcome, requestOf(ctx) ?? missingRequest())),
   });
   return radius.handler({ payTo, routes });
 }
@@ -478,14 +603,33 @@ function facilitatorErrorResponse(error: FacilitatorResponseError): Response {
   return jsonResponse({ error: 'facilitator_error', message: error.message }, 502);
 }
 
+const RETRY_SAME_PAYMENT = 'Send the same request with the same payment signature again later; do not sign a new payment for it.';
+
+/**
+ * `503`: settlement was submitted and has no final result. Keeps the facilitator's `PAYMENT-RESPONSE`
+ * (`success: false`, `errorReason`, `transaction`) so a buyer can resume with the same payment.
+ */
+function settlementPendingResponse(retryAfter: number, settle: SettleResponseLike, paymentResponse?: string | null): Response {
+  const transaction = settle.transaction || undefined;
+  const res = jsonResponse({ error: 'settlement_pending', message: `Settlement of this payment is pending. ${RETRY_SAME_PAYMENT}`, transaction, retryAfter }, 503);
+  if (paymentResponse) res.headers.set('PAYMENT-RESPONSE', paymentResponse);
+  res.headers.set('Retry-After', String(retryAfter));
+  res.headers.set('Cache-Control', 'no-store');
+  return res;
+}
+
+/** `502` for a settle call with no authoritative answer: the payment may have settled. */
+function settlementUnknownResponse(retryAfter: number, message: string, paymentResponse?: string | null): Response {
+  const res = jsonResponse({ error: 'facilitator_error', message, settlement: 'unknown', retryAfter }, 502);
+  if (paymentResponse) res.headers.set('PAYMENT-RESPONSE', paymentResponse);
+  res.headers.set('Retry-After', String(retryAfter));
+  res.headers.set('Cache-Control', 'no-store');
+  return res;
+}
+
 function internalErrorResponse(error: unknown): Response {
   const message = error instanceof Error ? error.message : String(error);
   return jsonResponse({ error: 'payment_processing_error', message }, 500);
-}
-
-function errorResponse(error: unknown): Response {
-  const fe = getFacilitatorResponseError(error);
-  return fe ? facilitatorErrorResponse(fe) : internalErrorResponse(error);
 }
 
 function setHeaders(res: Response, headers: Record<string, string> | undefined): void {
@@ -503,6 +647,36 @@ function mutable(res: Response, body: BodyInit | null = res.body): Response {
 /** Web-standard handler for an already-built x402 `RoutesConfig` (see `RadiusServer.buildRoutes`). @internal */
 export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig): PaymentHandler {
   const httpServer = new x402HTTPResourceServer(radius.server, routes);
+  const retryAfter = radius.settlementRetryAfter;
+
+  /** A 502 for facilitator failures; a settle with no answer also says `settlement: 'unknown'` and when to retry. */
+  const facilitatorFailure = (error: FacilitatorResponseError): Response =>
+    error instanceof SettlementUnknownError ? settlementUnknownResponse(retryAfter, error.message) : facilitatorErrorResponse(error);
+  const errorResponse = (error: unknown): Response => {
+    const fe = getFacilitatorResponseError(error);
+    return fe ? facilitatorFailure(fe) : internalErrorResponse(error);
+  };
+
+  /**
+   * x402 core answers every failed settlement with a 402 carrying the settle response in
+   * `PAYMENT-RESPONSE`. A pending or unknown settlement is not a rejection: a 402 would tell the
+   * buyer to pay again. Answer `503` (pending) or `502` (unknown) instead, keeping the header.
+   */
+  const settlementFailure = (res: Response): Response | undefined => {
+    const header = res.status === 402 ? res.headers.get(PAYMENT_RESPONSE_HEADER) : null;
+    if (!header) return undefined;
+    let settle: SettleResponseLike & { errorMessage?: string };
+    try {
+      settle = decodePaymentResponseHeader(header);
+    } catch {
+      return undefined;
+    }
+    if (settle.success) return undefined;
+    const status = radius.classifySettlement(settle);
+    if (status === 'pending') return settlementPendingResponse(retryAfter, settle, header);
+    if (status === 'unknown') return settlementUnknownResponse(retryAfter, settle.errorMessage ?? settle.errorReason ?? 'Settlement outcome unknown', header);
+    return undefined;
+  };
 
   // Lazy, request-time initialisation: Workers forbid I/O at module scope, and the static
   // facilitator answer means this is normally just bookkeeping anyway. A failure is not cached: the
@@ -521,8 +695,24 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
   /** Pay with an MPP credential: verify against the route's x402 offers, settle per `settle`, attach `Payment-Receipt`. */
   const handleMpp = async (request: Request, context: HTTPRequestContext, x402Challenge: Response, next: NextHandler): Promise<Response> => {
     const m = mpp!;
-    const failed = (f: { status: 402 | 502; reason: string }) =>
-      f.status === 502 ? jsonResponse({ error: 'facilitator_error', message: f.reason }, 502) : m.rejection(request, x402Challenge, f.reason);
+    const failed = (f: Extract<MppVerification, { ok: false }>) =>
+      f.status === 503
+        ? settlementPendingResponse(retryAfter, f.settle ?? { success: false })
+        : f.status === 502
+          ? f.settle || f.error instanceof SettlementUnknownError
+            ? settlementUnknownResponse(retryAfter, f.reason)
+            : jsonResponse({ error: 'facilitator_error', message: f.reason }, 502)
+          : m.rejection(request, x402Challenge, f.reason);
+    /** Settle and report the outcome to `onSettlement` (MPP settles outside x402 core's hooks). */
+    const settle = async (v: Extract<MppVerification, { ok: true }>, phase: SettlementOutcome['phase']) => {
+      const settled = await m.settle(v);
+      const payment = { payload: v.payload, requirements: v.requirements };
+      const outcome: SettlementOutcome = settled.ok
+        ? { status: 'settled', receipt: settled.receipt, phase, payment }
+        : { ...radius.settlementOutcome(settled.settle ?? settled.error ?? new Error(settled.reason), v.requirements, phase), payment, error: settled.error };
+      await radius.notifySettlement(outcome, context);
+      return settled;
+    };
     const verified = await m.verify(request, x402Challenge);
     if (!verified.ok) return failed(verified);
 
@@ -534,7 +724,7 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
     };
 
     if (radius.settleMode === 'before') {
-      const settled = await m.settle(verified);
+      const settled = await settle(verified, 'before-handler');
       if (!settled.ok) return failed(settled);
       await radius.notifySettled(settled.receipt, context);
       let res: Response;
@@ -549,7 +739,7 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
 
     const res = await next(request);
     if (res.status >= 400) return res;
-    const settled = await m.settle(verified);
+    const settled = await settle(verified, 'after-handler');
     if (!settled.ok) return failed(settled);
     await radius.notifySettled(settled.receipt, context);
     return withReceipt(res, settled.receipt);
@@ -575,6 +765,8 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
     if (result.type === 'no-payment-required') return next(request);
     if (result.type === 'payment-error') {
       const res = instructionsToResponse(result.response);
+      const unsettled = settlementFailure(res);
+      if (unsettled) return unsettled;
       if (!mpp || res.status !== 402) return res;
       // No x402 payment: an MPP credential is checked against the offers this 402 lists; otherwise
       // the 402 also offers MPP.
@@ -621,14 +813,17 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
         undefined,
         beforeHandlerSettlement,
       );
-      if (!settleResult.success) return instructionsToResponse(settleResult.response);
+      if (!settleResult.success) {
+        const failure = instructionsToResponse(settleResult.response);
+        return settlementFailure(failure) ?? failure;
+      }
       const out = mutable(res, responseBody ?? res.body);
       setHeaders(out, settleResult.headers);
       out.headers.set('Cache-Control', withPrivateCacheControl(out.headers.get('Cache-Control')));
       out.headers.delete(SETTLEMENT_OVERRIDES_HEADER);
       return out;
     } catch (error) {
-      if (error instanceof FacilitatorResponseError) return facilitatorErrorResponse(error);
+      if (error instanceof FacilitatorResponseError) return facilitatorFailure(error);
       console.error(error);
       return jsonResponse({ error: 'settlement_error' }, 402);
     }

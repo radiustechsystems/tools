@@ -146,14 +146,14 @@ With settle-before-handler (the `radius-sdk` default), a payment can succeed whi
 
 One rule applies to buyers and sellers: **before authorizing another payment, find out whether the first one settled.** Checking status, delivering a paid resource again, and signing a new payment are different actions.
 
-| What happened                                                                            | Did money move? | Safe next step                                                               |
-| ---------------------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------- |
-| The paid retry got a new `402` (`payment_rejected`), or verification failed              | No              | Fix the cause, then sign a new payment                                       |
-| The facilitator was unreachable before settlement was requested (the seller can tell)    | No              | Retry; another facilitator is fine if it supports the same scheme and method |
-| The facilitator failed or timed out during settlement; the buyer sees `502` or a timeout | Maybe           | Check status before anything else                                            |
-| The payment settled but the resource did not arrive                                      | Yes             | Deliver the same purchase again; do not charge again                         |
+| What happened                                                                                                        | Did money move? | Safe next step                                                                     |
+| -------------------------------------------------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------- |
+| The paid retry got a new `402` (`payment_rejected`) that reports no pending settlement, or verification failed       | No              | Fix the cause, then sign a new payment                                             |
+| The facilitator was unreachable before settlement was requested (the seller can tell)                                | No              | Retry; another facilitator is fine if it supports the same scheme and method       |
+| The facilitator failed, timed out or is still confirming during settlement; the buyer sees `502`, `503` or a timeout | Maybe           | Present the same signed payment again, or check status; never sign a new one first |
+| The payment settled but the resource did not arrive                                                                  | Yes             | Deliver the same purchase again; do not charge again                               |
 
-`radiusPayments` answers `502` with `facilitator_error` when the facilitator fails or cannot be reached, at verification or settlement, so a buyer must treat a `502` as uncertain. A definite settlement failure is a `402`.
+`radiusPayments` answers `502` with `facilitator_error` when the facilitator fails or cannot be reached, at verification or settlement (`settlement: 'unknown'` for the latter), so a buyer must treat a `502` as uncertain. A settlement the facilitator reports as pending (`errorReason: 'settlement_pending'`) is a `503` with `Retry-After`. A definite settlement failure is a `402`; through upstream adapters, x402 core also answers a pending settlement with a `402` whose `PAYMENT-RESPONSE` names it.
 
 **Check status**
 
@@ -162,7 +162,7 @@ One rule applies to buyers and sellers: **before authorizing another payment, fi
 
 **Retry or pay again**
 
-- Submitting the **same** signed payment again cannot charge twice: each Permit2 nonce can be used once.
+- Submitting the **same** signed payment again cannot charge twice: each Permit2 or EIP-3009 nonce can be used once. `payFetch.resume` from `radius-sdk/client` does this with backoff; see [pending and unknown payments](/reference/radius-sdk#pending-and-unknown-payments).
 - Signing a **new** payment while the first is uncertain can charge twice. Calling the `payFetch` from `createRadiusFetch` or `radius-cli wallet pay` again signs a new payment.
 - Switch facilitators only to one that supports the same scheme and transfer method (`exact` with `permit2` on Radius). Today that is the Radius facilitator; the [other facilitators](#other-facilitators) are not substitutes for `radius-sdk` payments.
 

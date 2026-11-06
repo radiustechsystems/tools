@@ -75,18 +75,42 @@ export class RadiusFacilitatorClient implements FacilitatorClient {
 }
 
 /**
+ * A settle call that failed without the facilitator's own answer: a timeout, a dropped connection,
+ * or an error status whose body is not an x402 response. The settle request may have reached the
+ * facilitator and the chain, so the outcome is `unknown`, not a rejection. It is a
+ * `FacilitatorResponseError`, so x402 core and `radiusPayments` treat it as one (`502`).
+ * `withUnknownOutcomes` throws it; the original error is its `cause`.
+ */
+export class SettlementUnknownError extends FacilitatorResponseError {
+  readonly operation = 'settle' as const;
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message);
+    this.name = 'SettlementUnknownError';
+    if (options && 'cause' in options) Object.defineProperty(this, 'cause', { value: options.cause, configurable: true, writable: true });
+  }
+}
+
+/**
  * A facilitator call that fails without the facilitator's own answer (a network error, or an
  * error status whose body is not an x402 response) leaves the outcome unknown: a settle may
  * have reached the chain. @x402/core reports those as a `402`, which a buyer reads as "rejected,
  * nothing moved", so this rethrows them as `FacilitatorResponseError`, which `radiusPayments`
  * answers with `502`. The facilitator's own answers (`VerifyError`, `SettleError`) pass through.
+ * A settle that fails this way, including on a `FacilitatorResponseError` (for example a timeout),
+ * is rethrown as `SettlementUnknownError`, so the seller can tell an unknown settlement from a
+ * failed `/verify` or `/supported`, where nothing was submitted.
  */
 export function withUnknownOutcomes(facilitator: FacilitatorClient): FacilitatorClient {
   const call = async <T>(operation: string, fn: () => Promise<T>): Promise<T> => {
     try {
       return await fn();
     } catch (error) {
-      if (error instanceof FacilitatorResponseError || error instanceof VerifyError || error instanceof SettleError) throw error;
+      if (error instanceof VerifyError || error instanceof SettleError || error instanceof SettlementUnknownError) throw error;
+      if (operation === 'settle') {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new SettlementUnknownError(error instanceof FacilitatorResponseError ? message : `Facilitator settle failed: ${message}`, { cause: error });
+      }
+      if (error instanceof FacilitatorResponseError) throw error;
       const message = error instanceof Error ? error.message : String(error);
       throw Object.assign(new FacilitatorResponseError(`Facilitator ${operation} failed: ${message}`), { cause: error });
     }

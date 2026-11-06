@@ -210,7 +210,31 @@ The SDK's web-standard and Hono handlers pass the response body through without 
 
 ### Handle uncertain settlement
 
-The SDK handlers return `502` with `error: 'facilitator_error'` when a facilitator call fails without an authoritative answer. The payment may already have settled. Explicit payment rejections return `402`. Preserve the request details and any transaction hash, and follow [payment recovery](/build/x402#recover-from-failed-or-uncertain-payments) before retrying.
+A settlement can be submitted without a final answer. The SDK handlers do not answer those with `402`, which would tell the buyer to pay again:
+
+- **Pending:** the facilitator broadcast the transaction but has no result yet (`errorReason: 'settlement_pending'`). The handler answers `503` with `Retry-After` and the facilitator's `PAYMENT-RESPONSE`, which names the transaction.
+- **Unknown:** the settle call timed out or lost its connection. The handler answers `502` with `error: 'facilitator_error'`, `settlement: 'unknown'` and `Retry-After`. The payment may already have settled.
+- **Rejected or failed:** the facilitator refused the payment or its transaction reverted. The handler answers `402`, as before.
+
+In both uncertain cases your handler does not run with `settle: 'before'`. The buyer presents the same signed payment again, and the facilitator settles it against the transaction it already broadcast, so the purchase is delivered once and charged once; the SDK's buyer does this with [`payFetch.resume`](/reference/radius-sdk#pending-and-unknown-payments). With `settle: 'after'` your handler runs again on that retry, so keep it idempotent.
+
+Record every outcome with `onSettlement`. It also receives the buyer's signed payment, which anyone can settle until it expires: store it like a secret and never log it.
+
+```typescript
+const pay = radiusPayments({
+  network: 'testnet',
+  payTo: '0xYourWalletAddress',
+  routes: { 'GET /api/report': '0.001' },
+  onSettlement: async (outcome, request) => {
+    if (outcome.status === 'pending' || outcome.status === 'unknown') {
+      // recordUnsettled is your own storage. Keep the transaction and payer; leave the signed payment out of logs.
+      await recordUnsettled({ status: outcome.status, transaction: outcome.receipt.transaction, payer: outcome.receipt.payer, path: new URL(request.url).pathname });
+    }
+  },
+});
+```
+
+To reconcile without a buyer, see [payment recovery](/build/x402#recover-from-failed-or-uncertain-payments).
 
 ## Accept other networks and MPP
 

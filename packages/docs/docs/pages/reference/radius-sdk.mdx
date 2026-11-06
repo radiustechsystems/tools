@@ -21,7 +21,7 @@ Requires Node.js 22 or later, or a runtime with `fetch` such as Cloudflare Worke
 
 | Entry point         | Exports                                                                                                                                                             | Peer dependency                                           |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `radius-sdk`        | Networks, `SBC`, `USDC_BASE`, price helpers, `getPaymentReceipt`, `RadiusPaymentError`, `radiusEnv`                                                                 | `@x402/core` `^2.27.0`                                    |
+| `radius-sdk`        | Networks, `SBC`, `USDC_BASE`, price helpers, `getPaymentReceipt`, `classifySettlement`, `RadiusPaymentError`, `radiusEnv`                                           | `@x402/core` `^2.27.0`                                    |
 | `radius-sdk/server` | Web-standard `radiusPayments`, `createRadiusServer`, `radiusFacilitators`, `registerRadius`, `assertRadiusSupported`, `proxyTo`, `RequestAdapter`, and server types | `@x402/core` `^2.27.0`                                    |
 | `radius-sdk/hono`   | `radiusPayments`, `proxyTo`, and their types                                                                                                                        | `@x402/core` `^2.27.0`, `hono` `^4`                       |
 | `radius-sdk/client` | `createRadiusFetch`, balance, ERC-20 and Permit2 actions, `getSettlement`, and the receipt and error exports                                                        | `@x402/core` and `@x402/evm` `^2.27.0`, `viem` `^2.48.11` |
@@ -63,19 +63,22 @@ import { radiusPayments } from 'radius-sdk/hono';
 app.use('/api/*', radiusPayments({ network: 'testnet', payTo: '0xYourWalletAddress', routes: { 'GET /api/lookup': '0.001 SBC' } }));
 ```
 
-| Option          | Type                                            | Default            | Description                                                                                                                                                        |
-| --------------- | ----------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `payTo`         | address or `(context) => address`               | Required           | Recipient of every payment unless a route overrides it                                                                                                             |
-| `routes`        | `Record<string, RouteSpec \| Price>`            | Required           | Priced routes keyed `METHOD /path`, with `*` wildcards; a bare price is shorthand for `{ price }`                                                                  |
-| `network`       | A preset ID or a `PaymentNetwork`               | `'mainnet'`        | See [Networks](#networks)                                                                                                                                          |
-| `networks`      | Array of networks or `{ network, facilitator }` | —                  | Instead of `network`: every route offers one payment option per network; see [Several networks](#several-networks)                                                 |
-| `mpp`           | `{ secretKey, realm? }`                         | —                  | Also accept [MPP](#mpp) payments                                                                                                                                   |
-| `settle`        | `'before'` or `'after'`                         | `'before'`         | `'before'` settles, then runs the handler, with no separate `/verify` call; `'after'` calls `/verify`, runs the handler, and settles only if it responds below 400 |
-| `gasSponsoring` | `'auto'` or boolean                             | `'auto'`           | Declare `eip2612GasSponsoring` in 402s; `'auto'` follows the facilitator's `/supported`                                                                            |
-| `facilitator`   | options object or `FacilitatorClient`           | Radius facilitator | See [Facilitator](#facilitator)                                                                                                                                    |
-| `onSettled`     | `(receipt, context) => void \| Promise<void>`   | —                  | Called once per settled payment                                                                                                                                    |
+| Option                 | Type                                            | Default              | Description                                                                                                                                                        |
+| ---------------------- | ----------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `payTo`                | address or `(context) => address`               | Required             | Recipient of every payment unless a route overrides it                                                                                                             |
+| `routes`               | `Record<string, RouteSpec \| Price>`            | Required             | Priced routes keyed `METHOD /path`, with `*` wildcards; a bare price is shorthand for `{ price }`                                                                  |
+| `network`              | A preset ID or a `PaymentNetwork`               | `'mainnet'`          | See [Networks](#networks)                                                                                                                                          |
+| `networks`             | Array of networks or `{ network, facilitator }` | —                    | Instead of `network`: every route offers one payment option per network; see [Several networks](#several-networks)                                                 |
+| `mpp`                  | `{ secretKey, realm? }`                         | —                    | Also accept [MPP](#mpp) payments                                                                                                                                   |
+| `settle`               | `'before'` or `'after'`                         | `'before'`           | `'before'` settles, then runs the handler, with no separate `/verify` call; `'after'` calls `/verify`, runs the handler, and settles only if it responds below 400 |
+| `gasSponsoring`        | `'auto'` or boolean                             | `'auto'`             | Declare `eip2612GasSponsoring` in 402s; `'auto'` follows the facilitator's `/supported`                                                                            |
+| `facilitator`          | options object or `FacilitatorClient`           | Radius facilitator   | See [Facilitator](#facilitator)                                                                                                                                    |
+| `onSettled`            | `(receipt, context) => void \| Promise<void>`   | —                    | Called once per settled payment                                                                                                                                    |
+| `onSettlement`         | `(outcome, context) => void \| Promise<void>`   | —                    | Called once per settlement attempt with its outcome; see [pending and unknown settlement](#pending-and-unknown-settlement)                                         |
+| `classifySettlement`   | `(settleResponse) => SettlementStatus`          | `classifySettlement` | Maps the facilitator's settle response to an outcome; replace it if your facilitator signals a pending settlement differently                                      |
+| `settlementRetryAfter` | number                                          | `2`                  | Seconds sent in `Retry-After` with a pending or unknown settlement                                                                                                 |
 
-It also accepts the [network overrides](#networks). Dynamic `payTo` and `price` functions receive the web-standard `Request` for `radius-sdk/server`, or the Hono context for `radius-sdk/hono`; they can return promises. `onSettled` receives that same context as its second argument.
+It also accepts the [network overrides](#networks). Dynamic `payTo` and `price` functions receive the web-standard `Request` for `radius-sdk/server`, or the Hono context for `radius-sdk/hono`; they can return promises. `onSettled` and `onSettlement` receive that same context as their second argument.
 
 With `settle: 'before'`, the web-standard handler receives the [receipt](#receipts) as its second argument. Hono handlers read `c.get('radiusPayment')`; add `RadiusPaymentVariables` to the Hono `Variables` type. With `settle: 'after'`, payment is not yet settled during the handler; use `onSettled` to record the receipt.
 
@@ -102,6 +105,23 @@ The default `settle: 'before'` settles before the application handler runs and p
 
 `onSettled` records settlement, not delivery. With `'before'`, it runs before the application handler. Errors thrown by the hook are logged by x402 core and do not fail the request. Store the receipt and delivery outcome separately.
 
+### Pending and unknown settlement
+
+A settlement can be submitted without a final answer: the facilitator broadcast the transaction but its confirmation wait ran out, or the settle call timed out or lost its connection. Neither is a rejection, so the SDK's web-standard and Hono handlers do not answer `402`, which would tell the buyer to pay again:
+
+| Settlement outcome                                                          | Response                                                                                                                             |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Settled                                                                     | The handler's response, with `PAYMENT-RESPONSE`                                                                                      |
+| Pending: the facilitator answers `errorReason: 'settlement_pending'`        | `503` with `Retry-After`, the facilitator's `PAYMENT-RESPONSE` (with the broadcast `transaction`), and `error: 'settlement_pending'` |
+| Unknown: the settle call got no facilitator answer                          | `502` with `Retry-After`, `error: 'facilitator_error'` and `settlement: 'unknown'`                                                   |
+| Rejected or failed: the facilitator refused it, or its transaction reverted | `402`, as before                                                                                                                     |
+
+The handler does not run for a pending or unknown payment with `settle: 'before'`; with `'after'` it has run, and its response is withheld. The buyer presents the same signed payment again (the SDK client does this with [`payFetch.resume`](#pending-and-unknown-payments)), and the facilitator settles it against the transaction it already broadcast, so the purchase is delivered once and charged once. With `'after'`, the handler runs again for that request, so make it idempotent or use `'before'`.
+
+`onSettlement(outcome, context)` reports every settlement attempt, also under upstream adapters, where x402 core still answers a pending settlement with `402` and its `PAYMENT-RESPONSE`. The outcome has `status` (`settled`, `pending`, `unknown`, `rejected` or `failed`), `receipt` (`charge.evidence` is `pending` for a pending one), `phase` (`'before-handler'` or `'after-handler'`) and `payment`, the buyer's signed payload and the requirement it pays. Keep pending and unknown outcomes for reconciliation, and handle `payment` like a secret; see [signed authorizations](#keep-signed-authorizations-secret).
+
+`classifySettlement` decides which facilitator answers are pending. The default follows `@x402/core` and `@x402/evm`: `errorReason: 'settlement_pending'` is pending, any other failure that names a transaction is `failed`, and one without a transaction is `rejected`. The Radius facilitator's response for a pending settlement is not final yet; if yours signals it differently, pass your own function. A settle call with no facilitator answer is always `unknown`.
+
 ### RouteSpec
 
 | Field               | Type                              | Default                  | Description                                   |
@@ -118,7 +138,7 @@ A `Price` is a string or number in display units of the asset (`'0.001 SBC'`, `'
 
 ## createRadiusServer
 
-`createRadiusServer(options)` from `radius-sdk/server` supplies the Radius resource server for upstream adapters such as `@x402/express`, `@x402/next`, and `@x402/hono`. It accepts `network`, `settle`, `gasSponsoring`, `facilitator`, `onSettled`, and the [network overrides](#networks). Configure recipients and prices through `routes()` or `handler()`.
+`createRadiusServer(options)` from `radius-sdk/server` supplies the Radius resource server for upstream adapters such as `@x402/express`, `@x402/next`, and `@x402/hono`. It accepts `network`, `settle`, `gasSponsoring`, `facilitator`, `onSettled`, `onSettlement`, `classifySettlement`, and the [network overrides](#networks). Configure recipients and prices through `routes()` or `handler()`.
 
 | Member                              | Purpose                                                                                        |
 | ----------------------------------- | ---------------------------------------------------------------------------------------------- |
@@ -127,6 +147,7 @@ A `Price` is a string or number in display units of the asset (`'0.001 SBC'`, `'
 | `radius.http({ payTo, routes })`    | Builds an `x402HTTPResourceServer` for adapters' `…FromHTTPServer` variants                    |
 | `radius.handler({ payTo, routes })` | Builds the SDK's web-standard payment handler; dynamic functions receive `Request`             |
 | `radius.onSettled(hook)`            | Registers a settlement listener and returns the server                                         |
+| `radius.onSettlement(hook)`         | Registers a listener for every settlement outcome and returns the server                       |
 | `radius.network`, `radius.networks` | The first resolved `PaymentNetwork`, and all of them in offer order                            |
 
 For `createRadiusServer`, `onSettled(receipt, context)` receives the x402 request context, which can be `undefined`. `requestOf(context)` extracts the web-standard `Request` when an SDK adapter supplied it. `RequestAdapter` wraps a `Request` as an x402 `HTTPAdapter` for custom integrations.
@@ -170,7 +191,7 @@ You build the routes and the 402 yourself in this setup, so `radiusPayments` opt
 
 ## createRadiusFetch
 
-Returns a `fetch` that pays x402 and [MPP](#mpp) challenges and retries the request. Responses other than `402` are returned unchanged.
+Returns a `fetch` that pays x402 and [MPP](#mpp) challenges and retries the request. Responses other than `402` are returned unchanged. `payFetch.pay(url)` makes the same request but resolves with a typed outcome; see [pending and unknown payments](#pending-and-unknown-payments).
 
 ```typescript
 import { createRadiusFetch } from 'radius-sdk/client';
@@ -178,19 +199,21 @@ import { createRadiusFetch } from 'radius-sdk/client';
 const payFetch = createRadiusFetch({ network: 'testnet', signer: process.env.RADIUS_PRIVATE_KEY as `0x${string}`, maxPerRequest: '0.01 SBC' });
 ```
 
-| Option               | Type                                         | Default            | Description                                                                                                                                                                  |
-| -------------------- | -------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `signer`             | private key, viem account, or `WalletClient` | Required           | Signs payments; sending transactions needs a key, a local account, or a `WalletClient`                                                                                       |
-| `maxPerRequest`      | `Price`                                      | Required           | Ceiling for each payment; not a cumulative budget                                                                                                                            |
-| `network`            | A preset ID or a `PaymentNetwork`            | `'mainnet'`        | Payments are made only on this network                                                                                                                                       |
-| `networks`           | Array of networks                            | —                  | Instead of `network`: pay on any of these, preferring them in order                                                                                                          |
-| `protocols`          | Array of `'x402'` and `'mpp'`                | `['x402', 'mpp']`  | Protocols to pay with, in preference order                                                                                                                                   |
-| `preferFunded`       | `boolean`                                    | `true`             | With several candidate networks, pay on one whose balance covers the price                                                                                                   |
-| `onPaymentRequired`  | `(offer) => boolean \| Promise<boolean>`     | —                  | Approve or decline an [offer](#offers) before signing                                                                                                                        |
-| `permit2Approval`    | `'auto'` or `'never'`                        | `'auto'`           | Without gas sponsoring, `'auto'` sends one unlimited Permit2 approval; `'never'` throws `approval_required`, also for a sponsored raw approve (`erc20ApprovalGasSponsoring`) |
-| `onApprovalRequired` | `(request) => boolean \| Promise<boolean>`   | —                  | Approve or decline any allowance change this client makes; see [approval requests](#approval-requests)                                                                       |
-| `onPaid`             | `(receipt, offer) => void`                   | —                  | Called after each paid response with the [receipt](#receipts), checked against the offer                                                                                     |
-| `fetch`              | `typeof fetch`                               | `globalThis.fetch` | Underlying fetch                                                                                                                                                             |
+| Option               | Type                                         | Default              | Description                                                                                                                                                                  |
+| -------------------- | -------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `signer`             | private key, viem account, or `WalletClient` | Required             | Signs payments; sending transactions needs a key, a local account, or a `WalletClient`                                                                                       |
+| `maxPerRequest`      | `Price`                                      | Required             | Ceiling for each payment; not a cumulative budget                                                                                                                            |
+| `network`            | A preset ID or a `PaymentNetwork`            | `'mainnet'`          | Payments are made only on this network                                                                                                                                       |
+| `networks`           | Array of networks                            | —                    | Instead of `network`: pay on any of these, preferring them in order                                                                                                          |
+| `protocols`          | Array of `'x402'` and `'mpp'`                | `['x402', 'mpp']`    | Protocols to pay with, in preference order                                                                                                                                   |
+| `preferFunded`       | `boolean`                                    | `true`               | With several candidate networks, pay on one whose balance covers the price                                                                                                   |
+| `onPaymentRequired`  | `(offer) => boolean \| Promise<boolean>`     | —                    | Approve or decline an [offer](#offers) before signing                                                                                                                        |
+| `permit2Approval`    | `'auto'` or `'never'`                        | `'auto'`             | Without gas sponsoring, `'auto'` sends one unlimited Permit2 approval; `'never'` throws `approval_required`, also for a sponsored raw approve (`erc20ApprovalGasSponsoring`) |
+| `onApprovalRequired` | `(request) => boolean \| Promise<boolean>`   | —                    | Approve or decline any allowance change this client makes; see [approval requests](#approval-requests)                                                                       |
+| `onPaid`             | `(receipt, offer) => void`                   | —                    | Called after each paid response with the [receipt](#receipts), checked against the offer                                                                                     |
+| `onPaymentPending`   | `(pending) => void`                          | —                    | Called when a paid request ends pending or unknown, with the `PendingPayment` to [resume](#pending-and-unknown-payments)                                                     |
+| `classifySettlement` | `(settleResponse) => SettlementStatus`       | `classifySettlement` | Recognizes a pending settlement in a receipt                                                                                                                                 |
+| `fetch`              | `typeof fetch`                               | `globalThis.fetch`   | Underlying fetch                                                                                                                                                             |
 
 It also accepts the [network overrides](#networks); with `networks`, they apply to the first network.
 
@@ -280,13 +303,14 @@ A receipt is what the server or facilitator reports. Decoding it does not prove 
 
 `charge.evidence` says how much the receipt tells you about the charge. Treat a value not listed here as unverified, because later releases can add values:
 
-| `evidence`   | Meaning                                                                                                                                        |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `implied`    | `exact`: the server reports success, and the scheme fixes the charge at the price                                                              |
-| `reported`   | The server reports the charge in `charge.reported`                                                                                             |
-| `zero`       | `upto`: the server reports a zero charge, so there is no settlement transaction                                                                |
-| `incomplete` | `upto`: the server reports success but not the charge. Anything from zero to `charge.authorized` can have moved; reconcile to learn the amount |
-| `failed`     | The server reports that settlement failed                                                                                                      |
+| `evidence`   | Meaning                                                                                                                                            |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `implied`    | `exact`: the server reports success, and the scheme fixes the charge at the price                                                                  |
+| `reported`   | The server reports the charge in `charge.reported`                                                                                                 |
+| `zero`       | `upto`: the server reports a zero charge, so there is no settlement transaction                                                                    |
+| `incomplete` | `upto`: the server reports success but not the charge. Anything from zero to `charge.authorized` can have moved; reconcile to learn the amount     |
+| `failed`     | The server reports that settlement failed                                                                                                          |
+| `pending`    | The server reports that settlement was submitted without a final result (`errorReason: 'settlement_pending'`); `transaction` is the broadcast hash |
 
 ### Receipt validation
 
@@ -306,6 +330,8 @@ The error's `details` has `reason` (for example `network_mismatch`), the decoded
 ### Reconcile a receipt
 
 `reconcilePayment(receipt, offer)` from `radius-sdk/client`, or `payFetch.reconcilePayment(receipt, offer)`, checks a receipt against the chain of `offer.network`. It looks for the offer's token moving from the payer to `offer.payTo` in the receipt's transaction, and compares that amount with the price (`exact`), or with the maximum and the reported charge (`upto`). Pass `{ payer, client }` as a third argument to name the payer or reuse a viem client; the payer defaults to the receipt's `payer`, and on `payFetch` to the wallet.
+
+A failure receipt that names a transaction, such as a pending one, is checked the same way, as a claim to pay the offer: `confirmed` means it settled despite the report, `reverted` that it did not. A failure without a transaction stays `unresolved`.
 
 The result keeps three amounts apart, in base units: `authorized` (the offer amount), `reported` (the receipt's charge), and `confirmed` (what the chain shows). An `incomplete` `upto` receipt is resolved here: `confirmed` is the amount that moved. `status` is one of these values; treat a value not listed here as not confirmed:
 
@@ -336,6 +362,63 @@ for (const { receipt, offer } of paid) {
   console.log(result.status, result.authorized, result.reported, result.confirmed);
 }
 ```
+
+## Pending and unknown payments
+
+A paid request can end without a final answer: the seller's facilitator is still confirming the settlement, or the request timed out or lost its response after the payment was sent. Calling `payFetch` again would sign a second payment, which can charge twice. Instead, present the same signed payment again.
+
+`payFetch.pay(input, init)` sends the request like `payFetch`, but resolves with an outcome instead of returning a bare response or throwing once a payment was signed. Errors before anything is signed, such as `price_above_limit` or `declined`, still throw.
+
+| `status`       | Meaning                                                                                                                                                                           | Next step                                         |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `settled`      | Funds moved. `delivered` says whether `response` is the resource; `evidence` is `receipt`, `chain`, `authorization` (the chain shows the signed authorization used) or `delivery` | Done; if not delivered, ask the seller to deliver |
+| `pending`      | Settlement was submitted and has no final result; `pending.transaction` is the broadcast hash when the seller named it                                                            | `resume(outcome.pending)`                         |
+| `unknown`      | No authoritative answer: a timeout, a lost response, a `5xx`, or a receipt that failed validation                                                                                 | `resume(outcome.pending)`                         |
+| `rejected`     | Refused before any settlement transaction; nothing moved                                                                                                                          | Fix the cause, then pay again                     |
+| `failed`       | Settlement was attempted and moved nothing: its transaction reverted, or the authorization expired unused                                                                         | Pay again if you still want the resource          |
+| `not_required` | The resource asked for no payment                                                                                                                                                 | —                                                 |
+
+`pending` and `unknown` are retryable; `settled`, `rejected` and `failed` are terminal (`isTerminalSettlement(status)`). Treat a status not listed here like `unknown`.
+
+```typescript
+const outcome = await payFetch.pay('https://api.example.com/report');
+if (outcome.status === 'pending' || outcome.status === 'unknown') {
+  const final = await payFetch.resume(outcome.pending, { maxAttempts: 5, signal: AbortSignal.timeout(60_000) });
+  if (final.status === 'settled' && final.delivered) console.log(await final.response?.json());
+}
+```
+
+`payFetch.resume(pending, options)` sends the original request with the original payment headers. It never signs a new payment, so a purchase it delivers is the original one, charged once. Between attempts it waits `initialDelayMs * backoffFactor^n`, at least the seller's `Retry-After` and at most `maxDelayMs`, counted from the previous attempt:
+
+| Option             | Default | Description                                                                |
+| ------------------ | ------- | -------------------------------------------------------------------------- |
+| `maxAttempts`      | `5`     | Presentations of the payment in this call                                  |
+| `initialDelayMs`   | `1000`  | First wait                                                                 |
+| `backoffFactor`    | `2`     | Growth of each wait                                                        |
+| `maxDelayMs`       | `30000` | Longest wait                                                               |
+| `attemptTimeoutMs` | `30000` | Timeout of one presentation; a timeout counts as `unknown`                 |
+| `signal`           | —       | Stops waiting and resolves with the latest outcome, marked `aborted: true` |
+| `client`           | —       | viem client for the chain reads below (the network's own client otherwise) |
+
+Aborting stops the wait, not the payment: the signed payment can still settle until its authorization expires. Resume again later with `outcome.pending`. When attempts run out, `resume` resolves with the latest `pending` or `unknown` outcome.
+
+`resume` reads the chain where that settles the question:
+
+- A settlement transaction the seller named that reverted is `failed`.
+- If the seller refuses the payment again, the earlier attempt may have used it. A transaction confirmed on chain, or a signed authorization the chain shows as used, is `settled` with `delivered: false`: ask the seller to deliver, do not pay again. An authorization that expired unused is `failed`, and paying again is safe. An unused authorization that is still valid stays `unknown` until it expires, because the earlier attempt could still settle.
+- A reported failure that names a transaction is confirmed on chain before `pay` or `resume` calls it `failed`.
+
+`outcome.pending` (`PendingPayment`) holds what resuming needs: `request` (URL, method, headers and body), `offer`, `paymentHeaders`, `authorization` (`kind`, `from`, `nonce`, `validBefore`), `transaction`, `receipt`, `attempts`, and `reason`. It holds objects, not a serialized form: to keep it across restarts, serialize it yourself.
+
+The plain `payFetch` keeps its behavior: it returns a `503` or `502`, or throws on a lost response. Pass `onPaymentPending` to `createRadiusFetch` to receive the `PendingPayment` from it too. A `payment_rejected` error whose `402` reports a pending settlement, as x402 core answers through upstream adapters, carries it as `details.pending`.
+
+### Keep signed authorizations secret
+
+A signed payment authorizes a transfer, not a request: whoever holds it can submit it for settlement until its `validBefore` (Permit2 `deadline`) passes, whether or not they are the seller you meant to pay. That is what makes resuming safe, since each authorization settles at most once, and it is why the record needs care:
+
+:::warning[Signed payments are bearer credentials until they expire]
+Store `PendingPayment`, `paymentHeaders` and the seller's `outcome.payment` like secrets, never log them, and delete them once the outcome is final. Prefer short signing windows (the route's `maxTimeoutSeconds`; the client caps it at 600 seconds), so an authorization that was never settled stops being redeemable soon. A rejected or failed authorization can stay valid until it expires, so do not hand it to anyone else.
+:::
 
 ## Balances
 
@@ -455,29 +538,29 @@ The SDK checks the realm (`mpp.realm`, by default the request's host), the expir
 
 ### Seller responses
 
-The SDK's web-standard and Hono handlers return `502` with `error: 'facilitator_error'` when a facilitator call fails without the facilitator's own answer, such as a dropped connection or gateway error page. Settlement can already have reached the chain. A `502` does not mean nothing moved: [reconcile the attempt](/build/x402#recover-from-failed-or-uncertain-payments) before authorizing another payment. A facilitator's explicit payment rejection still returns `402`.
+The SDK's web-standard and Hono handlers return `502` with `error: 'facilitator_error'` when a facilitator call fails without the facilitator's own answer, such as a dropped connection or gateway error page. During settlement the body adds `settlement: 'unknown'` and the response carries `Retry-After`: settlement can already have reached the chain. A pending settlement returns `503` with `error: 'settlement_pending'` and `Retry-After`. Neither means nothing moved: present the same payment again ([`payFetch.resume`](#pending-and-unknown-payments)) or [reconcile the attempt](/build/x402#recover-from-failed-or-uncertain-payments) before authorizing another payment. A facilitator's explicit payment rejection, or a settlement that failed, still returns `402`.
 
 ### Buyer errors
 
 Payment failures throw `RadiusPaymentError` with a `code` and, for some codes, `details`:
 
-| Code                          | Cause                                                                                                                                                 |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `price_above_limit`           | Every compatible offer is above `maxPerRequest`                                                                                                       |
-| `insufficient_balance`        | The server accepts several of your networks and the wallet's balance covers the price on none                                                         |
-| `declined`                    | `onPaymentRequired` or `onApprovalRequired` returned `false`                                                                                          |
-| `network_mismatch`            | The server's offers are on networks this client does not pay on                                                                                       |
-| `asset_mismatch`              | The server's offers are in another token                                                                                                              |
-| `no_compatible_offer`         | No offer uses a scheme or MPP method this client pays                                                                                                 |
-| `unsupported_transfer_method` | The server needs a transfer method other than `permit2` or `eip3009`                                                                                  |
-| `invalid_challenge`           | The 402 could not be parsed; `details.response` holds the response                                                                                    |
-| `payment_rejected`            | The paid retry got another 402; `details.response` holds the response and `details.error` the server's reason                                         |
-| `invalid_receipt`             | The payment response does not match the offer, for example another network, or more than the signed maximum; `details.reason` says which check failed |
-| `redirect_refused`            | No longer raised: a redirect on the paid request is followed without the payment header                                                               |
-| `approval_required`           | A Permit2 approval is needed and `permit2Approval` is `'never'`                                                                                       |
-| `approval_failed`             | The approval transaction reverted                                                                                                                     |
-| `faucet`                      | `fund()` failed                                                                                                                                       |
-| `config`                      | The options are invalid, for example a missing `maxPerRequest`                                                                                        |
+| Code                          | Cause                                                                                                                                                                                                   |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `price_above_limit`           | Every compatible offer is above `maxPerRequest`                                                                                                                                                         |
+| `insufficient_balance`        | The server accepts several of your networks and the wallet's balance covers the price on none                                                                                                           |
+| `declined`                    | `onPaymentRequired` or `onApprovalRequired` returned `false`                                                                                                                                            |
+| `network_mismatch`            | The server's offers are on networks this client does not pay on                                                                                                                                         |
+| `asset_mismatch`              | The server's offers are in another token                                                                                                                                                                |
+| `no_compatible_offer`         | No offer uses a scheme or MPP method this client pays                                                                                                                                                   |
+| `unsupported_transfer_method` | The server needs a transfer method other than `permit2` or `eip3009`                                                                                                                                    |
+| `invalid_challenge`           | The 402 could not be parsed; `details.response` holds the response                                                                                                                                      |
+| `payment_rejected`            | The paid retry got another 402; `details.response` holds the response and `details.error` the server's reason. When the 402 reports a pending settlement, `details.pending` holds the payment to resume |
+| `invalid_receipt`             | The payment response does not match the offer, for example another network, or more than the signed maximum; `details.reason` says which check failed                                                   |
+| `redirect_refused`            | No longer raised: a redirect on the paid request is followed without the payment header                                                                                                                 |
+| `approval_required`           | A Permit2 approval is needed and `permit2Approval` is `'never'`                                                                                                                                         |
+| `approval_failed`             | The approval transaction reverted                                                                                                                                                                       |
+| `faucet`                      | `fund()` failed                                                                                                                                                                                         |
+| `config`                      | The options are invalid, for example a missing `maxPerRequest`                                                                                                                                          |
 
 ## Networks
 
