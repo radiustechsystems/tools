@@ -1,5 +1,23 @@
 # radius-cli
 
+## 0.7.1
+
+### Patch Changes
+
+- d8b9681: Fix `wallet pay` and `sell check` truncating their output when stdout is a pipe. A large response body or `--json` envelope piped to another program (for example `radius-cli --json wallet pay get <url> | jq .`) was cut off, because the CLI exited before Node finished writing to the pipe. The commands now set the exit code and let stdout drain; exit codes are unchanged.
+
+## 0.7.0
+
+### Minor Changes
+
+- 6dcb7de: Add `receipt --event <sig>` to decode a receipt's logs against cast-style event signatures (repeatable; `--json` emits an array of decoded or raw logs), and `wallet password` to add or change the keystore password without changing the key or address (`RADIUS_NEW_PASSWORD`, at least 8 characters, skips the prompt; `--remove` removes the password). `receipt --event` exits 1 when the transaction reverted. The auto-created keystore notice now points to `wallet password` instead of `wallet new --force`, which replaced the key. Keystores are now written to a unique, fsynced temporary file and renamed into place, through a symlinked keystore path to its target. **Breaking for scripts that parse human output:** `wallet balance` without `--json` now prints `SBC:`, `RUSD:` and `Total:` on separate lines (e.g. `SBC:     0.030002 SBC`) instead of one `Balance:` line; the `--json` output is unchanged.
+
+### Patch Changes
+
+- c455926: Require `@x402/core` and `@x402/evm` 2.29.0 or later (the SDK's peer range was `^2.27.0`; the CLI pinned 2.27.0). 2.29 carries upstream security fixes, among them a zod floor for GHSA-mrhx-c7xc-m3w5, bounded facilitator response reads and stricter payment-header parsing. With 2.29 an unpaid `HEAD` on a route keyed `GET` gets a `402` instead of running the paid handler, so radius-sdk sellers now charge `HEAD` without a separate `HEAD` route.
+- Updated dependencies [c455926]
+  - radius-sdk@0.7.1
+
 ## 0.6.0
 
 ### Minor Changes

@@ -340,9 +340,15 @@ describe('radius-cli sell check', () => {
 
   it('warns when an unpaid HEAD is served', async () => {
     const fac = await facilitator(radiusKinds);
-    const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } })}/api/report`, facilitators: [fac.url], probeHead: true });
+    const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } }, undefined, (req) => (req.method === 'HEAD' ? Response.json({}) : undefined))}/api/report`, facilitators: [fac.url], probeHead: true });
     expect(statusOf(report, 'head')).toBe('warn');
     expect(report.ok).toBe(true);
+  });
+
+  it('passes HEAD on a radius-sdk seller, which charges HEAD on a GET route', async () => {
+    const fac = await facilitator(radiusKinds);
+    const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } })}/api/report`, facilitators: [fac.url], probeHead: true });
+    expect(report.checks.find((c) => c.id === 'head')).toMatchObject({ status: 'pass', message: 'unpaid HEAD answered 402' });
   });
 
   it('--pay makes one payment within the threshold and checks the receipt', async () => {
@@ -604,9 +610,7 @@ describe('radius-cli sell check', () => {
   });
 
   describe('the command: --ci, --min-score and GitHub Actions', () => {
-    class Exit extends Error {
-      constructor(readonly code: number) { super(`exit ${code}`); }
-    }
+    // The command sets process.exitCode rather than calling process.exit(), so piped stdout drains.
     async function cli(env: Record<string, string | undefined>, ...args: string[]) {
       const program = new Command().option('--network <name>').option('--rpc-url <url>').option('--private-key <hex>').option('--password-file <path>').option('--sbc <address>').option('--rusd <address>').option('--json');
       registerSell(program);
@@ -615,16 +619,15 @@ describe('radius-cli sell check', () => {
       for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
       const out = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { stdout += String(chunk); return true; });
       const err = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { stderr += String(chunk); return true; });
-      const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Exit(code ?? 0); }) as never);
       const log = vi.spyOn(console, 'log').mockImplementation((s: unknown) => { stdout += `${String(s)}\n`; });
+      process.exitCode = undefined;
       try {
         await program.parseAsync(['node', 'radius-cli', ...args]);
-        throw new Error('sell check did not exit');
-      } catch (e) {
-        if (e instanceof Exit) return { code: e.code, stdout, stderr };
-        throw e;
+        if (process.exitCode === undefined) throw new Error('sell check did not set an exit code');
+        return { code: Number(process.exitCode), stdout, stderr };
       } finally {
-        out.mockRestore(); err.mockRestore(); exit.mockRestore(); log.mockRestore();
+        process.exitCode = undefined;
+        out.mockRestore(); err.mockRestore(); log.mockRestore();
         vi.unstubAllEnvs();
       }
     }
