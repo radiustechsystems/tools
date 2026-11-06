@@ -17,6 +17,13 @@
  * Output lands in public/skills/<skill-name>.md so Vite serves
  * each as a static asset in dev and copies them to dist/public/ at build time.
  *
+ * It also writes the Agent Skills Discovery index (v0.2.0,
+ * https://github.com/cloudflare/agent-skills-discovery-rfc) to public/.well-known/agent-skills/index.json,
+ * with a copy of each skill beside it at public/.well-known/agent-skills/<name>/ (SKILL.md at the RFC's
+ * conventional location, plus the references and scripts it links to; evaluations stay out). Each
+ * `skill-md` entry points at that SKILL.md and carries the SHA-256 of its bytes, so a published index and
+ * the files it describes always come from the same build.
+ *
  * Usage:
  *   npx tsx scripts/generate-skills-md.ts
  *
@@ -29,7 +36,8 @@
  *   Progressive disclosure: metadata (~100 tokens) → instructions (<5000 tokens) → resources (as needed)
  */
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, existsSync } from 'node:fs';
 import { join, dirname, relative, resolve, basename } from 'node:path';
 import { parse } from 'yaml';
 
@@ -53,6 +61,15 @@ const SKILLS_OUTPUT_BASE = join(PUBLIC_DIR, 'skills');
 
 /** Canonical GitHub URL for the repo holding the skills */
 const SKILLS_REPO_URL = 'https://github.com/radiustechsystems/tools';
+
+/** Agent Skills Discovery directory, served at /.well-known/agent-skills/ (the index and a SKILL.md per skill). */
+const AGENT_SKILLS_URL_PATH = '/.well-known/agent-skills';
+/** The same path under public/, so Vite serves it at AGENT_SKILLS_URL_PATH. */
+const AGENT_SKILLS_DIR = join(PUBLIC_DIR, '.well-known', 'agent-skills');
+const AGENT_SKILLS_INDEX_PATH = join(AGENT_SKILLS_DIR, 'index.json');
+
+/** Schema URI of the Agent Skills Discovery index format (RFC v0.2.0). */
+const AGENT_SKILLS_SCHEMA = 'https://schemas.agentskills.io/discovery/0.2.0/schema.json';
 
 // ---------------------------------------------------------------------------
 // Marketplace manifest (read from .claude-plugin/marketplace.json)
@@ -429,6 +446,89 @@ function processSkill(plugin: MarketplacePlugin, skillName: string, skillRoot: s
 }
 
 // ---------------------------------------------------------------------------
+// Agent Skills Discovery index (/.well-known/agent-skills/index.json)
+// ---------------------------------------------------------------------------
+
+interface AgentSkillsIndexEntry {
+  name: string;
+  type: 'skill-md';
+  description: string;
+  url: string;
+  digest: string;
+}
+
+/**
+ * What a published skill consists of: SKILL.md and the subdirectories it links to. Anything else in the
+ * skill directory (evaluations, dotfiles, scratch folders) is not published.
+ */
+const SKILL_PUBLISHED_DIRS = ['references', 'scripts'];
+
+/** The skill name pattern the Agent Skills Discovery index requires. */
+const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** Copy a directory tree, skipping dot-named entries (Wrangler's asset upload drops them anyway). */
+function copyTree(from: string, to: string): void {
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from).sort()) {
+    if (entry.startsWith('.')) continue;
+    const source = join(from, entry);
+    if (statSync(source).isDirectory()) copyTree(source, join(to, entry));
+    else writeFileSync(join(to, entry), readFileSync(source));
+  }
+}
+
+/** Publish a skill: its SKILL.md plus the subdirectories in SKILL_PUBLISHED_DIRS that exist. */
+function copySkillTree(from: string, to: string): void {
+  mkdirSync(to, { recursive: true });
+  writeFileSync(join(to, 'SKILL.md'), readFileSync(join(from, 'SKILL.md')));
+  for (const dir of SKILL_PUBLISHED_DIRS) {
+    const source = join(from, dir);
+    if (existsSync(source) && statSync(source).isDirectory()) copyTree(source, join(to, dir));
+  }
+}
+
+/**
+ * Publish a skill under public/.well-known/agent-skills/<name>/ (its SKILL.md with the reference files
+ * and scripts it links to, so relative links resolve) and build its index entry. `url` is path-absolute
+ * (the RFC resolves it against the index URL), so it points at this same build on every host, previews
+ * included; `digest` is the SHA-256 of the exact SKILL.md bytes copied.
+ */
+function agentSkillsIndexEntry(skillName: string, skillRoot: string): AgentSkillsIndexEntry {
+  if (!SKILL_NAME.test(skillName)) {
+    throw new Error(
+      `[${skillName}] skill directory names must match ${SKILL_NAME} to be listed in the agent-skills index`,
+    );
+  }
+  const description = readSkillDescription(skillName, skillRoot);
+  if (description.length > 1024) {
+    throw new Error(
+      `[${skillName}] description is ${description.length} characters; the agent-skills index allows 1024`,
+    );
+  }
+  const copyDir = join(AGENT_SKILLS_DIR, skillName);
+  copySkillTree(skillRoot, copyDir);
+  const bytes = readFileSync(join(copyDir, 'SKILL.md'));
+  return {
+    name: skillName,
+    type: 'skill-md',
+    description,
+    url: `${AGENT_SKILLS_URL_PATH}/${skillName}/SKILL.md`,
+    digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+  };
+}
+
+/** Write the index: skills sorted by name, fixed key order and a trailing newline, so builds are reproducible. */
+function writeAgentSkillsIndex(entries: AgentSkillsIndexEntry[]): void {
+  mkdirSync(AGENT_SKILLS_DIR, { recursive: true });
+  const skills = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const index = { $schema: AGENT_SKILLS_SCHEMA, skills };
+  writeFileSync(AGENT_SKILLS_INDEX_PATH, JSON.stringify(index, null, 2) + '\n', 'utf-8');
+  console.log(
+    `  ✓  .well-known/agent-skills/index.json (${skills.length} skill${skills.length !== 1 ? 's' : ''}, skills published beside it)`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main script entry
 // ---------------------------------------------------------------------------
 
@@ -449,15 +549,27 @@ function main(): void {
 
     let totalSkills = 0;
     let totalSections = 0;
+    const indexEntries: AgentSkillsIndexEntry[] = [];
+    const seen = new Set<string>();
+
+    // Start the agent-skills directory from empty: a failed run then leaves no index behind rather than
+    // one whose digests do not match the copies beside it, and copies of removed skills do not linger.
+    rmSync(AGENT_SKILLS_DIR, { recursive: true, force: true });
 
     for (const plugin of manifest.plugins) {
       for (const { name, root, plugin: skillPlugin } of resolvePluginSkills(plugin)) {
+        if (seen.has(name)) throw new Error(`Skill ${name} appears in more than one plugin`);
+        seen.add(name);
         console.log(`\n  Processing: ${name} v${skillPlugin.version}`);
         const sections = processSkill(skillPlugin, name, root);
         totalSkills++;
         totalSections += sections;
+        indexEntries.push(agentSkillsIndexEntry(name, root));
       }
     }
+
+    console.log('');
+    writeAgentSkillsIndex(indexEntries);
 
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
 
