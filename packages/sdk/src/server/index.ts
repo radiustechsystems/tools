@@ -95,8 +95,9 @@ export interface RadiusServerOptions extends NetworkOverrides {
    */
   mpp?: MppServerOptions;
   /**
-   * Whether 402s declare `eip2612GasSponsoring` (lets first-time wallets pay without an
-   * approval transaction). 'auto' (default): only when the facilitator supports it.
+   * Whether 402s with a Permit2 offer declare `eip2612GasSponsoring` (lets first-time wallets
+   * pay without an approval transaction). 'auto' (default): only when the facilitator supports
+   * it. Never declared when every offer is EIP-3009, which needs no approval.
    */
   gasSponsoring?: GasSponsoringMode;
   /**

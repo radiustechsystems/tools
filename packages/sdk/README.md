@@ -147,9 +147,10 @@ What you get, on the wire, with no Radius-specific client knowledge required:
 
 - Unpaid request → `402` with a `PAYMENT-REQUIRED` header: `exact` scheme, SBC via EIP-3009
   (the transfer method the facilitator lists first, so no approval and no gas for the payer;
-  Permit2 is offered only if a facilitator lists it first), with `eip2612GasSponsoring` declared
-  when the facilitator supports it, which lets a first-time Permit2 payer skip the approval
-  transaction.
+  Permit2 is offered only if a facilitator lists it first). A Permit2 offer comes with
+  `eip2612GasSponsoring` declared when the facilitator supports it, which lets a first-time
+  Permit2 payer skip the approval transaction; an EIP-3009 offer needs no approval and declares
+  nothing.
 - Paid request (`PAYMENT-SIGNATURE`) → settled on Radius through the Radius facilitator
   **before** your handler runs, with `/settle` as the only facilitator call (core makes no
   separate `/verify`). `settle: 'after'` switches to the x402 default flow: `/verify`, your
@@ -161,8 +162,9 @@ What you get, on the wire, with no Radius-specific client knowledge required:
   delivery: in the default flow it fires before the handler, and errors it throws are logged, not
   surfaced. Keep the receipt and the delivery outcome separately, and reconcile a paid 5xx (or an
   uncertain 502) against the transaction before the buyer pays again.
-- `eip2612GasSponsoring` is declared only when the facilitator's `/supported` lists it
-  (`gasSponsoring: true | false` overrides), so clients never send a permit nobody will honour.
+- `eip2612GasSponsoring` is declared only when the 402 carries a Permit2 offer and that offer's
+  facilitator lists it in `/supported` (`gasSponsoring: true | false` overrides the facilitator
+  check), so clients never send a permit nobody will honour.
 - No I/O at module scope (Workers-safe): the SDK's handlers fetch the facilitator's `/supported`
   lazily on the first paid request after each cold start. The upstream adapters fetch it at
   construction by default (fine on Node; pass their `syncFacilitatorOnStart: false` and call
@@ -213,7 +215,7 @@ assertRadiusSupported(server, radius);   // throws if no facilitator reported `e
   `FacilitatorResponseError`: the outcome is unknown, and a settle may have reached the chain.
   Answer with a 5xx, not as a rejected payment.
 - You build the routes and 402s, so declare `eip2612GasSponsoring` yourself if you want it (the
-  scheme removes the declaration when the facilitator does not support it). Base needs its own
+  scheme removes the declaration unless a Permit2 offer's facilitator supports it). Base needs its own
   facilitator: `networks: [{ network: 'base', facilitator: { url } }]`.
 - `networks` takes the same entries as `createRadiusServer`, default Radius mainnet; `gasSponsoring`
   is the same option.

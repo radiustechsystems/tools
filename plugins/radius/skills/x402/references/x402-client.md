@@ -28,9 +28,9 @@ if (!response.ok || !payment?.success) {
 // independent on-chain confirmation is required before recording payment.
 ```
 
-`maxPerRequest` limits each authorization, including the maximum for `upto`; it is not a cumulative budget. A facilitator's payment response is a report, so keep the transaction hash for reconciliation. `onPaymentRequired` receives the selected network, asset, recipient, amount, version, scheme, and transfer method before signing. A buyer may need a one-time Permit2 approval when sponsoring is absent; the SDK supports `onApprovalRequired` and `permit2Approval: 'never'`.
+`maxPerRequest` limits each authorization, including the maximum for `upto`; it is not a cumulative budget. A facilitator's payment response is a report, so keep the transaction hash for reconciliation. `onPaymentRequired` receives the selected network, asset, recipient, amount, version, scheme, and transfer method before signing. A buyer may need a one-time Permit2 approval for a Permit2 offer when sponsoring is absent; EIP-3009 offers need none; the SDK supports `onApprovalRequired` and `permit2Approval: 'never'`.
 
-The SDK supports v1 `exact` via EIP-3009, v2 `exact` via EIP-3009 or Permit2, and v2 `upto` via Permit2. The Radius facilitator currently advertises v2 `exact` Permit2; inspect the server's challenge for other endpoints. The manual example below covers only a sponsored v2 `exact` Permit2 offer.
+The SDK supports v1 `exact` via EIP-3009, v2 `exact` via EIP-3009 or Permit2, and v2 `upto` via Permit2. The Radius facilitators list EIP-3009 before Permit2, so `radius-sdk` sellers on Radius (radius-sdk 0.4.0 or later) offer v2 `exact` via EIP-3009; Permit2 offers come from `upto` and from facilitators without EIP-3009. Inspect the server's challenge for other endpoints. The manual example below covers only a sponsored v2 `exact` Permit2 offer.
 
 ## Advanced: manual Permit2 protocol illustration
 
