@@ -103,6 +103,8 @@ const receipt = getPaymentReceipt(response, payFetch.network);
 if (receipt) console.log(receipt.success, receipt.transaction, receipt.explorerUrl);
 ```
 
+A receipt is the seller's report, not proof of settlement. `payFetch` checks each receipt against the offer it paid, and throws `invalid_receipt` for a receipt on another network, from another payer, or with an amount the offer does not allow. `receipt.charge` keeps the authorized maximum apart from the reported charge. When an `upto` receipt omits the charge, `amount` stays unset rather than assuming the maximum. To confirm the charge on chain, call `payFetch.reconcilePayment(receipt, offer)`; see [reconcile a receipt](/reference/radius-sdk#reconcile-a-receipt).
+
 If a paid request fails or times out, check the chain before paying again. `payFetch.getSettlement(txHash)` returns the settlement's status and transfers, or `undefined` while the node does not know the transaction. Use `settlement.paid(to)` for the amount a recipient received: `transfers` can include unrelated transfers in the same transaction, such as the facilitator's fee conversion.
 
 ### When the outcome is uncertain
