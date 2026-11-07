@@ -86,6 +86,7 @@ const BUILD_SIDEBAR: SidebarItem[] = [
     collapsed: false,
     items: [
       { text: 'Create and fund a wallet', link: '/build/wallet' },
+      { text: 'Use a wallet proxy', link: '/build/wallet-proxy' },
       { text: 'Claim and transact', link: '/build/claim-and-transact' },
       { text: 'Bridge stablecoins', link: '/build/bridge' },
       { text: 'Dashboard', link: '/build/dashboard' },

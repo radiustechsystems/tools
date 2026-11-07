@@ -284,6 +284,12 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   (`permit2Approval`, `onApprovalRequired`); EIP-2612 permits are part of the payment and are not.
 - `maxPerRequest` is a per-request ceiling, **not** a cumulative budget. An agent that loops can
   exceed any total unless you enforce one around it.
+- No key in the process: `proxySigner({ url, alias, token })` from `radius-sdk/signers/proxy` is a
+  signer backed by a wallet proxy (the Worker in `radius-workshop/wallet-proxy`, which holds Privy,
+  Coinbase CDP or Para credentials and signs on request; `proxySignerEnv(process.env)` reads
+  radius-cli's `RADIUS_WALLET_PROXY_URL`, `RADIUS_WALLET_ALIAS`, `RADIUS_WALLET_PROXY_TOKEN` and
+  `CF_ACCESS_CLIENT_*`). It is async (one address lookup), signs only after an offer is accepted,
+  and throws `signer_unavailable` with the proxy's answer in `details` when it cannot sign.
 - Wallet helpers on the same object, for the first network (`payFetch.on(network)` for the
   others): `address`, `balance()` (the payment asset only), `balances()` (native RUSD,
   SBC and the aggregate, separately; see [Balances](#balances-native-rusd-vs-stablecoins)),
@@ -569,7 +575,7 @@ see x402. Interop is tested against `mppx`, the reference implementation, in bot
 
 | Path | What |
 | --- | --- |
-| `src/` | `networks`, `balances`, `erc20`, `permit2`, `amounts`, `receipt`, `settlement`, `schemes`, `env`, `errors`, `mpp` (MPP wire format); `server/` (seller core: web-standard handler, x402 resource server, facilitator, scheme, MPP payments); `hono/` (Hono wrapper); `client/` (buyer) |
+| `src/` | `networks`, `balances`, `erc20`, `permit2`, `amounts`, `receipt`, `settlement`, `schemes`, `env`, `errors`, `mpp` (MPP wire format); `server/` (seller core: web-standard handler, x402 resource server, facilitator, scheme, MPP payments); `hono/` (Hono wrapper); `client/` (buyer); `signers/proxy` (wallet-proxy signer) |
 | `examples/worker-plain` | Worker with no framework, the web-standard handler: free `/`, paid `/api/lookup` and `/api/query` (`pnpm --filter radius-worker-plain dev`, port 8788) |
 | `examples/worker-seller` | Same API on Hono (`pnpm --filter radius-worker-seller dev`) |
 | `examples/express-seller` | Same API on Express through `@x402/express` (`pnpm --filter radius-express-seller start`, port 8789) |

@@ -92,3 +92,14 @@ test('buyer initializes with the installed viem peer', () => {
     assert.equal(payFetch.maxPerRequest, 1000n);
   `);
 });
+
+test('proxy signer entry point resolves and validates its options', () => {
+  run(`
+    import assert from 'node:assert/strict';
+    import { proxySigner, proxySignerEnv } from 'radius-sdk/signers/proxy';
+    import { RadiusPaymentError } from 'radius-sdk';
+    assert.equal(typeof proxySigner, 'function');
+    assert.deepEqual(proxySignerEnv({ RADIUS_WALLET_PROXY_URL: 'https://proxy.test', RADIUS_WALLET_ALIAS: 'agent0-main' }), { url: 'https://proxy.test', alias: 'agent0-main' });
+    await assert.rejects(proxySigner({ url: 'nope', alias: 'agent0-main' }), (e) => e instanceof RadiusPaymentError && e.code === 'config');
+  `);
+});

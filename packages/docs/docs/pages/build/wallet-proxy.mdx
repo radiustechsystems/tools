@@ -1,0 +1,107 @@
+---
+title: Use a Wallet Proxy
+description: Point radius-cli or radius-sdk at a wallet proxy that holds Privy, Coinbase CDP, or Para credentials, so an agent runtime signs Radius payments without holding a private key.
+---
+
+import { STABLECOIN } from '../../constants';
+
+# Use a wallet proxy [Sign payments without a key in the agent runtime]
+
+An agent that pays over x402 needs a signer. With the default `radius-cli` keystore, the key lives on the machine that runs the agent. A wallet proxy moves it out: a small HTTP service holds the credentials of a hosted wallet (Privy, Coinbase CDP, or Para) and signs on request. The agent runtime gets a URL, a wallet alias, and an access token, and never a key.
+
+`radius-cli` and `radius-sdk` speak the API of the reference proxy, the Cloudflare Worker in [radius-workshop/wallet-proxy](https://github.com/radius-workshop/wallet-proxy) (`examples/cloudflare-wallet-proxy`). From `radius-cli` `0.8.0`, `RADIUS_WALLET=proxy` makes every account-needing command use it. From `radius-sdk` `0.8.0`, `proxySigner` from `radius-sdk/signers/proxy` is a `signer` for `createRadiusFetch`.
+
+## How it works
+
+```text
+Hermes, Replit, Claude Code, or any agent runtime
+  RADIUS_WALLET=proxy
+  RADIUS_WALLET_PROXY_URL=https://<worker-domain>
+  RADIUS_WALLET_ALIAS=agent0-main
+  RADIUS_WALLET_PROXY_TOKEN=<optional bearer token>
+        |
+        v
+Wallet proxy (Cloudflare Worker)
+  Worker secrets: provider credentials, optional bearer token
+  WALLET_PROXY_WALLETS: alias to provider wallet mapping
+        |
+        v
+Privy, Coinbase CDP, or Para
+```
+
+The proxy exposes, per wallet alias, `GET /v1/wallets/:alias/address`, `GET .../capabilities`, and `POST .../sign-typed-data`, `.../sign-message`, and `.../sign-transaction`. It answers errors as `{ "error": { "code", "message" } }` with an HTTP status, and has no key export endpoint.
+
+x402 `exact` and `upto` payments and MPP charges move funds by signature (EIP-3009 `transferWithAuthorization` or Permit2), so paying needs only `sign-typed-data`. The CLI and the SDK ask the proxy for the wallet's address once, and for a signature only after an offer has passed the price limit and your approval hook. Nothing is sent to the proxy for a 402 that is refused.
+
+The proxy is a secret boundary, not a policy engine. Spending limits stay where they are today: `--threshold` for the CLI, `maxPerRequest` and `onPaymentRequired` for the SDK, and the wallet provider's own policy. See [set up an agent to pay](/build/make-payments/agents).
+
+## Deploy the proxy
+
+Clone [radius-workshop/wallet-proxy](https://github.com/radius-workshop/wallet-proxy) and, in `examples/cloudflare-wallet-proxy`, map wallet aliases to provider wallets in `WALLET_PROXY_WALLETS` (`wrangler.toml`):
+
+```jsonc
+{
+  "agent0-main": { "provider": "privy", "walletId": "wlt_..." },
+  "agent1-main": { "provider": "cdp", "accountName": "radius-agent-1", "address": "0x..." },
+  "agent2-main": { "provider": "para", "email": "agent2@example.com", "walletId": "...", "address": "0x..." },
+}
+```
+
+Store the provider credentials as Worker secrets (`npx wrangler secret put PRIVY_APP_ID`, and so on; the Worker README lists them per provider), then deploy with `npx wrangler deploy`.
+
+For production, put the Worker behind Cloudflare Zero Trust Access with a service token per agent. The Worker also accepts a bearer token (`WALLET_PROXY_BEARER_TOKEN`) as a simpler fallback. Never store provider credentials in the agent runtime.
+
+## Point radius-cli at it
+
+Set the wallet source and the proxy in the agent's environment:
+
+```bash
+export RADIUS_NETWORK=testnet
+export RADIUS_WALLET=proxy
+export RADIUS_WALLET_PROXY_URL=https://wallet-proxy.example.workers.dev
+export RADIUS_WALLET_ALIAS=agent0-main
+export RADIUS_WALLET_PROXY_TOKEN=use-a-secret-manager   # bearer token, if the Worker uses one
+
+radius-cli wallet address
+radius-cli wallet balance --json
+radius-cli --json wallet pay get https://api.example.com/lookup --threshold 0.01 -y
+```
+
+With Cloudflare Access service tokens instead of a bearer token, set `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`; they are sent as the `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers.
+
+Every account-needing command then uses the proxy wallet: `wallet address`, `wallet balance`, `wallet sign`, `wallet sign-typed-data`, `wallet sign-jwt`, `wallet faucet`, `wallet send`, `wallet pay`, and `sell check --pay`. No keystore is read or created. `--private-key` still overrides it on any command.
+
+What changes under `RADIUS_WALLET=proxy`:
+
+- `wallet new`, `wallet import`, `wallet password`, and `wallet export` refuse: the proxy holds the key and does not export or replace it. Unset `RADIUS_WALLET` to work with the local keystore again.
+- `wallet send` and any other command that sends a transaction sign it through the proxy's `sign-transaction` endpoint, when its `capabilities` say it signs transactions. The payment itself never needs one: only an unsponsored Permit2 approval does.
+- `wallet sign-jwt` signs a raw hash, which the Worker supports for Privy and CDP wallets, not Para.
+- A proxy that is unreachable, refuses the token, or does not know the alias fails the command with the proxy's answer, for example `wallet proxy refused address for alias agent0-main (401 UNAUTHORIZED): Unauthorized`.
+
+## Use it from radius-sdk
+
+```typescript
+import { createRadiusFetch } from 'radius-sdk/client';
+import { proxySigner, proxySignerEnv } from 'radius-sdk/signers/proxy';
+
+// proxySignerEnv reads RADIUS_WALLET_PROXY_URL, RADIUS_WALLET_ALIAS, RADIUS_WALLET_PROXY_TOKEN
+// and the CF_ACCESS_CLIENT_* variables; or pass { url, alias, token, headers } yourself.
+const signer = await proxySigner(proxySignerEnv(process.env));
+
+const payFetch = createRadiusFetch({
+  network: 'testnet',
+  signer,
+  maxPerRequest: '0.01 SBC',
+});
+```
+
+`proxySigner` looks the address up once (pass `address` to skip that) and returns a signer with `signTypedData`, `signMessage`, `signHash`, `signTransaction`, and `capabilities()`. Any failure to reach the proxy or get a signature from it throws a `RadiusPaymentError` with code `signer_unavailable`; its `details` carry the `url`, `alias`, `operation`, and the proxy's `status`, `code`, and `message`.
+
+Sending transactions from `payFetch` (`send`, `approvePermit2`, an unsponsored Permit2 approval) needs a transaction-capable signer. The proxy signer signs payments; for those transactions, use a key or a viem account.
+
+## Related pages
+
+- [Set up an agent to pay](/build/make-payments/agents): limits and tooling around the signer
+- [Create and fund a wallet](/build/wallet): the local keystore
+- [radius-cli](/reference/radius-cli): every command and environment variable
+- [radius-sdk](/reference/radius-sdk): `createRadiusFetch` and the error codes
