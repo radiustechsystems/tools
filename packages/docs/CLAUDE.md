@@ -81,6 +81,10 @@ Vocs generates agent Markdown from the MDX AST, not from React.
 - "View as Markdown" and "Copy for LLM" below every page title come from `docs/components/PageActions.tsx`, inserted by `docs/rehype-page-actions.ts` (`markdown.rehypePlugins`). Vocs 2 has no slot below the title. Do not add it to pages by hand. Rehype plugins run only for HTML, so agent Markdown is unaffected.
 - Vocs's floating "Ask AI" bar (it covers content) and its "Copy page for AI" button (a duplicate of PageActions) are hidden in `_root.css`.
 
+### PostHog analytics
+
+`scripts/postbuild-analytics.ts` (run by `postbuild`) adds PostHog's loader to every built HTML page before `</head>`. Don't move it into `head` in `vocs.config.ts`: ad blockers that strip inline PostHog scripts would then break React hydration (error #418) and force a full client re-render; outside React's tree, a stripped or blocked loader changes nothing. Nothing on the site may depend on PostHog loading. Events go to the "Radius Platform" project (the console's) through the `t.radiustech.xyz` proxy, tagged `source: docs` and `surface: docs`. The script runs only when `location.hostname` is `docs.radiustech.xyz`, so local runs and Worker previews send nothing: test against production. The `phc_` key is public (it can only send events); never put a personal API key here.
+
 ### Logo Configuration
 
 ```typescript

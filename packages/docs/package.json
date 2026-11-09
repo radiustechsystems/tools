@@ -20,7 +20,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint --fix .",
     "docs:validate": "tsx scripts/generate-release-notes.ts && tsx scripts/validate-docs-v2.ts",
-    "postbuild": "tsx scripts/postbuild-static-markdown.ts",
+    "postbuild": "tsx scripts/postbuild-static-markdown.ts && tsx scripts/postbuild-analytics.ts",
     "docs:markdown-audit": "tsx scripts/generate-release-notes.ts && vocs markdown-audit",
     "docs:agent-check": "tsx scripts/validate-agent-markdown.ts",
     "docs:sitemap-check": "tsx scripts/validate-sitemap.ts",
