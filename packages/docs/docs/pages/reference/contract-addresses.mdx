@@ -52,7 +52,7 @@ Deployment artifacts for both networks live in the safe-singleton-factory reposi
 
 ## x402 contracts
 
-These contracts are used by x402 facilitators for Permit2-based payment settlement. Both are deployed to the same deterministic address on all EVM chains via CREATE2.
+These contracts are used by x402 facilitators for Permit2-based payment settlement. Both are deployed to the same deterministic address on all EVM chains via CREATE2. The preferred {STABLECOIN} path, EIP-3009, uses neither: the facilitator calls `transferWithAuthorization` on the {STABLECOIN} token contract directly, with no proxy and no allowance.
 
 | Contract                                                                                                    | Address                                      | Why you use it                                                                                                                                                               |
 | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

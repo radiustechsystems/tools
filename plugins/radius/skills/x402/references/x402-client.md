@@ -28,9 +28,73 @@ if (!response.ok || !payment?.success) {
 // independent on-chain confirmation is required before recording payment.
 ```
 
-`maxPerRequest` limits each authorization, including the maximum for `upto`; it is not a cumulative budget. A facilitator's payment response is a report, so keep the transaction hash for reconciliation. `onPaymentRequired` receives the selected network, asset, recipient, amount, version, scheme, and transfer method before signing. A buyer may need a one-time Permit2 approval when sponsoring is absent; the SDK supports `onApprovalRequired` and `permit2Approval: 'never'`.
+`maxPerRequest` limits each authorization, including the maximum for `upto`; it is not a cumulative budget. A facilitator's payment response is a report, so keep the transaction hash for reconciliation. `onPaymentRequired` receives the selected network, asset, recipient, amount, version, scheme, and transfer method before signing. An EIP-3009 offer needs no approval. A buyer needs a one-time Permit2 approval only for a Permit2 offer when sponsoring is absent; the SDK supports `onApprovalRequired` and `permit2Approval: 'never'`.
 
-The SDK supports v1 `exact` via EIP-3009, v2 `exact` via EIP-3009 or Permit2, and v2 `upto` via Permit2. The Radius facilitator currently advertises v2 `exact` Permit2; inspect the server's challenge for other endpoints. The manual example below covers only a sponsored v2 `exact` Permit2 offer.
+The SDK supports v1 `exact` via EIP-3009, v2 `exact` via EIP-3009 or Permit2, and v2 `upto` via Permit2. The Radius facilitators list `eip3009` first, then `permit2`, so a Radius seller offers v2 `exact` EIP-3009 by default; inspect the server's challenge for other endpoints. The EIP-3009 example below covers a v2 `exact` EIP-3009 offer, and the manual Permit2 illustration after it covers only a sponsored v2 `exact` Permit2 offer.
+
+## Sign an EIP-3009 payment manually
+
+For a v2 `exact` offer with `extra.assetTransferMethod` `eip3009`, the client signs one EIP-712 `TransferWithAuthorization` in the SBC token's domain. No approval transaction, EIP-2612 permit, or payer gas is involved: the facilitator submits the signature to the token with `transferWithAuthorization`. Use the SDK in application code; this shows what it signs.
+
+```typescript
+import { privateKeyToAccount } from 'viem/accounts';
+import { toHex } from 'viem';
+
+const account = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
+
+// `offer` is the selected entry of accepts[] from the decoded PAYMENT-REQUIRED header.
+const chainId = Number(offer.network.split(':')[1]); // 'eip155:72344' -> 72344
+const authorization = {
+  from: account.address,
+  to: offer.payTo, // the seller's payTo, never a facilitator wallet
+  value: BigInt(offer.amount), // 6-decimal base units
+  validAfter: 0n,
+  validBefore: BigInt(Math.floor(Date.now() / 1000) + offer.maxTimeoutSeconds),
+  nonce: toHex(crypto.getRandomValues(new Uint8Array(32))), // random bytes32, single use
+};
+
+const signature = await account.signTypedData({
+  domain: {
+    name: offer.extra.name, // 'Stable Coin'
+    version: offer.extra.version, // '1'
+    chainId,
+    verifyingContract: offer.asset, // the SBC token
+  },
+  types: {
+    TransferWithAuthorization: [
+      { name: 'from', type: 'address' },
+      { name: 'to', type: 'address' },
+      { name: 'value', type: 'uint256' },
+      { name: 'validAfter', type: 'uint256' },
+      { name: 'validBefore', type: 'uint256' },
+      { name: 'nonce', type: 'bytes32' },
+    ],
+  },
+  primaryType: 'TransferWithAuthorization',
+  message: authorization,
+});
+
+// The PAYMENT-SIGNATURE value: base64 JSON, integers as decimal strings.
+const paymentPayload = {
+  x402Version: 2,
+  resource, // echoed from the 402 response
+  accepted: offer, // the one selected requirement, singular
+  payload: {
+    signature,
+    authorization: {
+      ...authorization,
+      value: authorization.value.toString(),
+      validAfter: authorization.validAfter.toString(),
+      validBefore: authorization.validBefore.toString(),
+    },
+  },
+};
+const header = Buffer.from(JSON.stringify(paymentPayload)).toString('base64');
+```
+
+Each nonce works once: replaying a settled authorization reverts `EIP3009: authorization is used`, and a signature that does not match the domain or fields reverts `EIP3009: invalid signature`. To check whether an authorization settled, read `authorizationState(from, nonce)` on the SBC token. The facilitator verifies an `eip3009` payment against `authorizationState` and the payer's balance without simulating the transfer, so a token-side revert shows at settlement.
+
+---
 
 ## Advanced: manual Permit2 protocol illustration
 
@@ -594,7 +658,7 @@ async function fetchWithRetry(apiUrl: string, chainId: number, maxRetries = 2) {
 
 ## Third-party facilitators: pre-approving Permit2
 
-Radius-operated facilitators support EIP-2612 gas sponsoring for first-time wallets. Some third-party facilitators do **not** process EIP-2612 gas sponsoring during settlement. Fresh wallets may need to pre-approve the Permit2 contract before their first x402 payment when using those facilitators.
+This applies only to Permit2 offers; an EIP-3009 offer needs no approval. Radius-operated facilitators support EIP-2612 gas sponsoring for first-time wallets. Some third-party facilitators do **not** process EIP-2612 gas sponsoring during settlement. Fresh wallets may need to pre-approve the Permit2 contract before their first Permit2 payment when using those facilitators.
 
 Use EIP-2612 `permit()` on the SBC contract to grant Permit2 an allowance:
 
