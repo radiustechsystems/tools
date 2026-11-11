@@ -155,7 +155,7 @@ RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
   -y
 ```
 
-The CLI prints the response and the settlement transaction. A payer that holds only {STABLECOIN} can pay: the Radius facilitator sponsors the one-time Permit2 approval.
+The CLI prints the response and the settlement transaction. A payer that holds only {STABLECOIN} can pay: an EIP-3009 offer needs no approval and no payer gas, and for a Permit2 offer the Radius facilitator sponsors the one-time approval.
 
 ## Read the payment in a handler
 

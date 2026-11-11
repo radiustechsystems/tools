@@ -6,6 +6,10 @@ newest first, as `## <version> (<YYYY-MM-DD>)` with the date it reached `main`. 
 notes (docs.radiustech.xyz/release-notes) are built from this file: write each change's first
 sentence for developers who use the skills.
 
+## 0.2.3 (2026-11-09)
+
+- The `x402` and `radius-dev` skills now say SBC on Radius supports EIP-3009, the preferred x402 transfer method. The payer signs one `TransferWithAuthorization` and needs no Permit2 approval and no gas, and the Radius facilitators list `eip3009` before `permit2`. Permit2 is no longer called the recommended path. The `x402` skill adds an EIP-3009 signing example and gotchas (the `Stable Coin` / `1` domain, `to` = `payTo`, a random `bytes32` nonce, the `validBefore` window), and scopes the Permit2, EIP-2612 and gas-sponsoring guidance to Permit2 offers.
+
 ## 0.2.2 (2026-10-26)
 
 - The buyer install commands in the `x402` and `radius-dev` skills install both x402 peer packages, `@x402/core` and `@x402/evm`. `@x402/evm` is an optional peer that npm and pnpm skip, which left `radius-sdk/client` unable to load. The `sell-api` skill names `@x402/core` for sellers, and the plugin README says which peer each entry point needs.

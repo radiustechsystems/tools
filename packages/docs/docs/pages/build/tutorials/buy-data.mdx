@@ -120,7 +120,7 @@ settlement success 1000n
 after: buyer 0.499 SBC; seller 0.001 SBC
 ```
 
-`payFetch` received the `402`, checked the offer against `maxPerRequest`, signed a payment, and retried. The receipt comes from the seller; `getSettlement` reads the same transaction from the chain, and `paid(seller)` shows the seller received 1000 base units. Use `paid(to)` rather than reading `transfers` directly: a settlement transaction can also contain the facilitator's own fee conversion. The buyer paid exactly the price: the facilitator sponsored the one-time Permit2 approval, so no gas was spent.
+`payFetch` received the `402`, checked the offer against `maxPerRequest`, signed a payment, and retried. The receipt comes from the seller; `getSettlement` reads the same transaction from the chain, and `paid(seller)` shows the seller received 1000 base units. Use `paid(to)` rather than reading `transfers` directly: a settlement transaction can also contain the facilitator's own fee conversion. The buyer paid exactly the price and spent no gas: an EIP-3009 offer needs no approval, and for a Permit2 offer the facilitator sponsors the one-time approval.
 
 ## 4. Refuse an offer above the limit
 
@@ -214,6 +214,6 @@ With `--json`, the output includes a `payment` object with the amount, recipient
 
 ## Next steps
 
-- [Make payments](/build/make-payments): signers, error codes, uncertain outcomes, and Permit2 approval.
+- [Make payments](/build/make-payments): signers, error codes, uncertain outcomes, and Permit2 approvals.
 - [Set up an agent to pay](/build/make-payments/agents): skills, wallets, and where to enforce limits.
 - [radius-sdk reference](/reference/radius-sdk): every option for `createRadiusFetch`.
