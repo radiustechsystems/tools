@@ -351,6 +351,7 @@ function headImpl(path: string, context: HeadContext, data: HeadData): HeadResul
   // Vocs renders <Head> twice per page: once in the document root (no page
   // frontmatter) and once inside the page layout (with frontmatter). Emit the
   // structured data only in the latter so each JSON-LD block appears once.
+  // (The PostHog loader is not rendered here: scripts/postbuild-analytics.ts injects it outside React.)
   if (!context.frontmatter) return base;
 
   const publisher = { '@type': 'Organization', name: 'Radius', url: 'https://radiustech.xyz' };

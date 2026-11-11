@@ -87,8 +87,13 @@ jobs:
         working-directory: packages/docs
         run: pnpm fetch-cost
 
+      # The PostHog project key for docs.radiustech.xyz (scripts/postbuild-analytics.ts). Required here, so a
+      # missing secret fails the deploy instead of shipping a site that records nothing.
       - name: Build docs
         working-directory: packages/docs
+        env:
+          POSTHOG_DOCS_KEY: ${{ secrets.POSTHOG_DOCS_KEY }}
+          POSTHOG_DOCS_KEY_REQUIRED: "true"
         run: pnpm build
 
       - name: Deploy
