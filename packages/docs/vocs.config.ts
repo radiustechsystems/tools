@@ -118,6 +118,7 @@ const REFERENCE_SIDEBAR: SidebarItem[] = [
     text: 'Payments',
     collapsed: false,
     items: [
+      { text: 'Supported schemes and transports', link: '/reference/payments' },
       { text: 'radius-sdk', link: '/reference/radius-sdk' },
       { text: 'radius-cli', link: '/reference/radius-cli' },
       { text: 'x402 facilitator API', link: '/reference/facilitator-api' },
