@@ -13,9 +13,15 @@
  * Nothing on the site calls PostHog, so no feature depends on it loading.
  *
  * Events go to the "Radius Platform" PostHog project (688196), the same project as
- * app.radiustech.xyz, through t.radiustech.xyz, PostHog's managed reverse proxy. The project API
- * key is public: it can only send events. The loader runs only on the production host, so local
- * runs, Worker previews and other mirrors of the build send nothing.
+ * app.radiustech.xyz, through t.radiustech.xyz, PostHog's managed reverse proxy.
+ *
+ * The project API key comes from `POSTHOG_DOCS_KEY` at build time (a repository secret in
+ * .github/workflows/docs-deploy.yml), not from the source. It is public once deployed, since it can
+ * only send events, but keeping it out of the repository lets it be rotated without a code change.
+ * Without it the build adds no loader, so local builds and PR previews ship none. The production
+ * deploy sets `POSTHOG_DOCS_KEY_REQUIRED=true`, so a missing secret fails the deploy instead of
+ * shipping a site that silently records nothing. The loader also runs only on the production host,
+ * so other mirrors of a production build send nothing.
  *
  * Runs automatically via the `postbuild` script.
  */
@@ -26,8 +32,19 @@ import { dirname, join } from 'node:path';
 const PROJECT_ROOT = join(import.meta.dirname ?? dirname(new URL(import.meta.url).pathname), '..');
 const OUT_DIR = process.env.VOCS_OUT_DIR ?? join(PROJECT_ROOT, 'dist', 'public');
 
+const KEY = process.env.POSTHOG_DOCS_KEY?.trim() ?? '';
+const REQUIRED = process.env.POSTHOG_DOCS_KEY_REQUIRED === 'true';
+
+if (!KEY) {
+  if (REQUIRED) throw new Error('POSTHOG_DOCS_KEY is not set; the production build needs it for analytics.');
+  console.log('  -  POSTHOG_DOCS_KEY not set: no PostHog loader added');
+  process.exit(0);
+}
+// A project API key, never a personal one (phx_), which could read and change the project.
+if (!/^phc_[A-Za-z0-9]+$/.test(KEY)) throw new Error('POSTHOG_DOCS_KEY must be a PostHog project API key (phc_...).');
+
 const POSTHOG = {
-  key: 'phc_D6W25w2AujhkbjqD7m5KZyJRhT4423LzdD7bb8NLW7Jg',
+  key: KEY,
   productionHost: 'docs.radiustech.xyz',
   options: {
     api_host: 'https://t.radiustech.xyz',
