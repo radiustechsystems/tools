@@ -3,7 +3,7 @@ title: radius-sdk reference
 description: Reference for radius-sdk, the TypeScript SDK for x402 and MPP payments on Radius and other EVM networks — entry points, radiusPayments and createRadiusFetch options, networks, wallet helpers, balances, errors, and configuration.
 ---
 
-import { TESTNET_CHAIN_ID, MAINNET_CHAIN_ID, STABLECOIN, NATIVE_TOKEN } from '../../constants';
+import { STABLECOIN, NATIVE_TOKEN } from '../../constants';
 
 # radius-sdk reference [TypeScript SDK for x402 payments on Radius]
 
@@ -421,12 +421,16 @@ Payment failures throw `RadiusPaymentError` with a `code` and, for some codes, `
 
 ## Networks
 
-| Network                          | Chain ID           | Asset        | Default facilitator | Export          |
-| -------------------------------- | ------------------ | ------------ | ------------------- | --------------- |
-| `'mainnet'` / `'radius'`         | {MAINNET_CHAIN_ID} | {STABLECOIN} | Radius              | `radiusMainnet` |
-| `'testnet'` / `'radius-testnet'` | {TESTNET_CHAIN_ID} | {STABLECOIN} | Radius              | `radiusTestnet` |
-| `'base'`                         | 8453               | USDC         | Radius              | `baseMainnet`   |
-| `'base-sepolia'`                 | 84532              | USDC         | Radius testnet      | `baseSepolia`   |
+{/* networks:start */}
+
+| Network                            | Chain ID | Asset | Default facilitator                | Export          |
+| ---------------------------------- | -------- | ----- | ---------------------------------- | --------------- |
+| `'mainnet'` / `'radius'` (default) | 723487   | SBC   | facilitator.radiustech.xyz         | `radiusMainnet` |
+| `'testnet'` / `'radius-testnet'`   | 72344    | SBC   | facilitator.testnet.radiustech.xyz | `radiusTestnet` |
+| `'base'`                           | 8453     | USDC  | facilitator.radiustech.xyz         | `baseMainnet`   |
+| `'base-sepolia'`                   | 84532    | USDC  | facilitator.testnet.radiustech.xyz | `baseSepolia`   |
+
+{/* networks:end */}
 
 A `PaymentNetwork` carries a viem `Chain` (`radiusTestnet.chain`) plus its payment `asset`, default `facilitatorUrl`, `faucetUrl` (Radius only), and the names x402 v1 challenges use for it. `definePaymentNetwork({ chain, asset, facilitatorUrl })` builds one for any other EVM network; `asset` gives the token's address, symbol, decimals, and EIP-712 domain `name` and `version`.
 

@@ -3,7 +3,7 @@ title: radius-cli
 description: Use radius-cli for local Radius wallets, signing, balance checks, transactions, contract reads, and paying x402 and MPP endpoints.
 ---
 
-import { MAINNET_RPC_URL, MAINNET_CHAIN_ID, TESTNET_RPC_URL, TESTNET_CHAIN_ID, SBC_CONTRACT, STABLECOIN, NATIVE_TOKEN } from '../../constants';
+import { TESTNET_RPC_URL, SBC_CONTRACT, STABLECOIN, NATIVE_TOKEN } from '../../constants';
 
 # radius-cli [Local wallet and execution CLI for Radius]
 
@@ -38,10 +38,14 @@ radius-cli wallet pay --help
 
 ## Networks
 
-| Network   | Chain ID           | Default RPC                    |
-| --------- | ------------------ | ------------------------------ |
-| `mainnet` | {MAINNET_CHAIN_ID} | <code>{MAINNET_RPC_URL}</code> |
-| `testnet` | {TESTNET_CHAIN_ID} | <code>{TESTNET_RPC_URL}</code> |
+{/* networks:start */}
+
+| Network               | Chain ID | Default RPC                          |
+| --------------------- | -------- | ------------------------------------ |
+| `mainnet` _(default)_ | 723487   | `https://rpc.radiustech.xyz`         |
+| `testnet`             | 72344    | `https://rpc.testnet.radiustech.xyz` |
+
+{/* networks:end */}
 
 `radius-cli` defaults to mainnet. Set the network explicitly in scripts and agent workflows.
 
