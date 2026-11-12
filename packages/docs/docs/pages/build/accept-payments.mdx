@@ -214,11 +214,11 @@ The SDK handlers return `502` with `error: 'facilitator_error'` when a facilitat
 
 ## Accept other networks and MPP
 
-Radius is the default. To also accept USDC on Base, list the networks; each route then offers one payment option per network. Base mainnet has no default facilitator, so name the one that settles for you:
+Radius is the default. To also accept USDC on Base, list the networks; each route then offers one payment option per network, and the Radius facilitator settles both. Name a facilitator per network (`{ network: 'base', facilitator: { url } }`) to settle elsewhere:
 
 ```typescript
 const pay = radiusPayments({
-  networks: ['mainnet', { network: 'base', facilitator: { url: 'https://your-base-facilitator.example' } }],
+  networks: ['mainnet', 'base'],
   payTo: '0xYourWalletAddress',
   routes: { 'GET /api/lookup': '0.001' },
 });
