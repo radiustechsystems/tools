@@ -157,7 +157,7 @@ packages/docs/
 
 ## Network Configuration
 
-Network values (chain IDs, RPC URLs, asset names and decimals, contract addresses, faucet URLs) live in `docs/constants.ts`. Use the constants in MDX (`{TESTNET_RPC_URL}`) instead of copying values into pages or this file.
+Network values (chain IDs, RPC URLs, asset names and decimals, contract addresses, faucet URLs) live in `docs/constants.ts`. Use the constants in MDX (`{TESTNET_RPC_URL}`) instead of copying values into pages or this file. The networks tables in the SDK and CLI READMEs and reference pages are the exception: `scripts/generate-networks.ts` renders them from `radius-sdk`'s presets (`pnpm docs:networks`; `pnpm lint` fails when one is stale), and checks that `docs/constants.ts` agrees with the presets, so don't edit the tables by hand.
 
 ---
 

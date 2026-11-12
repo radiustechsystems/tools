@@ -453,12 +453,16 @@ tokens are reported in `tokens` but not valued 1:1 in `total`.
 
 ## Networks and currency
 
-| Preset | Chain | Asset | Default facilitator |
-| --- | --- | --- | --- |
-| `'mainnet'` / `'radius'` (default) | Radius, 723487 | SBC | Radius |
-| `'testnet'` / `'radius-testnet'` | Radius testnet, 72344 | SBC | Radius testnet |
-| `'base'` | Base, 8453 | USDC | Radius |
-| `'base-sepolia'` | Base Sepolia, 84532 | USDC | Radius testnet |
+<!-- networks:start -->
+
+| Preset                             | Chain                      | Asset | Default facilitator                |
+| ---------------------------------- | -------------------------- | ----- | ---------------------------------- |
+| `'mainnet'` / `'radius'` (default) | Radius Network, 723487     | SBC   | facilitator.radiustech.xyz         |
+| `'testnet'` / `'radius-testnet'`   | Radius Test Network, 72344 | SBC   | facilitator.testnet.radiustech.xyz |
+| `'base'`                           | Base, 8453                 | USDC  | facilitator.radiustech.xyz         |
+| `'base-sepolia'`                   | Base Sepolia, 84532        | USDC  | facilitator.testnet.radiustech.xyz |
+
+<!-- networks:end -->
 
 ```ts
 import { radiusTestnet, baseSepolia, definePaymentNetwork, resolveNetwork } from 'radius-sdk';
