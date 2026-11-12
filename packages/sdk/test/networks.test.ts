@@ -5,8 +5,13 @@ import {
   baseMainnet,
   baseSepolia,
   baseSepoliaChain,
+  counterpartOf,
   definePaymentNetwork,
   isNetworkId,
+  NETWORK_ALIASES,
+  NETWORK_NAMES,
+  PRESET_NAMES,
+  PRESET_NETWORKS,
   presetForChainId,
   radiusMainnet,
   radiusMainnetChain,
@@ -55,10 +60,9 @@ describe('viem chains', () => {
   it('describe Base and Base Sepolia, with USDC and no Radius features', () => {
     expect(baseChain).toMatchObject({ id: 8453, nativeCurrency: { symbol: 'ETH', decimals: 18 }, rpcUrls: { default: { http: ['https://mainnet.base.org'] } } });
     expect(baseSepoliaChain).toMatchObject({ id: 84532, testnet: true, rpcUrls: { default: { http: ['https://sepolia.base.org'] } } });
-    expect(baseMainnet).toMatchObject({ name: 'base', network: 'eip155:8453', asset: USDC_BASE, radius: false, testnet: false, v1Names: ['base'] });
-    expect(baseMainnet.facilitatorUrl).toBeUndefined();
+    expect(baseMainnet).toMatchObject({ name: 'base', network: 'eip155:8453', asset: USDC_BASE, radius: false, testnet: false, v1Names: ['base'], facilitatorUrl: 'https://facilitator.radiustech.xyz' });
     expect(baseMainnet.faucetUrl).toBeUndefined();
-    expect(baseSepolia).toMatchObject({ name: 'base-sepolia', network: 'eip155:84532', asset: USDC_BASE_SEPOLIA, radius: false, testnet: true, v1Names: ['base-sepolia'], facilitatorUrl: 'https://x402.org/facilitator' });
+    expect(baseSepolia).toMatchObject({ name: 'base-sepolia', network: 'eip155:84532', asset: USDC_BASE_SEPOLIA, radius: false, testnet: true, v1Names: ['base-sepolia'], facilitatorUrl: 'https://facilitator.testnet.radiustech.xyz' });
     // The EIP-712 domains differ between the two USDC deployments.
     expect(USDC_BASE).toMatchObject({ address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', name: 'USD Coin', version: '2', decimals: 6 });
     expect(USDC_BASE_SEPOLIA).toMatchObject({ address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', name: 'USDC', version: '2', decimals: 6 });
@@ -66,6 +70,21 @@ describe('viem chains', () => {
 });
 
 describe('preset lookup', () => {
+  it('lists every preset once, with mainnet/testnet counterparts that point back', () => {
+    expect(PRESET_NETWORKS.map((n) => n.name)).toEqual(PRESET_NAMES);
+    expect(NETWORK_NAMES).toEqual([...PRESET_NAMES, ...Object.keys(NETWORK_ALIASES)]);
+    for (const n of PRESET_NETWORKS) {
+      const other = counterpartOf(n)!;
+      expect(other.testnet).toBe(!n.testnet);
+      expect(other.radius).toBe(n.radius);
+      expect(counterpartOf(other)).toBe(n);
+    }
+    expect(counterpartOf(radiusMainnet)).toBe(radiusTestnet);
+    expect(counterpartOf(baseSepolia)).toBe(baseMainnet);
+    expect(counterpartOf(resolveNetwork('base', { rpcUrl: 'https://base.example' }))).toBe(baseSepolia);
+    expect(counterpartOf(definePaymentNetwork({ chain: baseChain, asset: USDC_BASE }))).toBeUndefined();
+  });
+
   it('finds presets by chain id and matches CAIP-2 ids and x402 v1 names', () => {
     expect(presetForChainId(723487)).toBe(radiusMainnet);
     expect(presetForChainId(84532)).toBe(baseSepolia);

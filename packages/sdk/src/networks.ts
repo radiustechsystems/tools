@@ -7,11 +7,16 @@
  * `PaymentNetwork` wraps a chain with what x402 needs (payment asset, default facilitator,
  * x402 v1 network names) and exposes a few fields derived from the chain for convenience.
  *
- * Presets: Radius mainnet and testnet (the default), Base and Base Sepolia. Any other EVM chain
- * is one `definePaymentNetwork()` call away.
+ * Presets: Radius mainnet and testnet (the default), Base and Base Sepolia, each paired with its
+ * counterpart in the other tier (`counterpart`). Every preset defaults to a Radius facilitator:
+ * `facilitator.radiustech.xyz` settles Radius and Base, `facilitator.testnet.radiustech.xyz`
+ * Radius testnet and Base Sepolia. Any other EVM chain is one `definePaymentNetwork()` call away.
+ * To add a preset: a name in `PRESET_NAMES`, a `definePaymentNetwork()` literal and its entry
+ * in `PRESET_NETWORKS`; `NetworkName`, `PRESETS_BY_NAME` and `NETWORK_NAMES` follow.
  *
  * Radius values verified against docs.radiustech.xyz and the live facilitator `/supported`
- * responses (2026-09-11); Base USDC values match @x402/evm's default assets.
+ * responses (2026-09-11); Base USDC values match @x402/evm's default assets. Facilitator
+ * defaults follow the Radius platform catalog (2026-11-12).
  */
 
 import type { Chain } from 'viem';
@@ -47,8 +52,9 @@ export interface PaymentNetwork {
   /** `chain.rpcUrls.default.http[0]`. */
   rpcUrl: string;
   /**
-   * Facilitator sellers use when they do not name one. Set for Radius (its own facilitator) and
-   * Base Sepolia (x402.org); unset for Base mainnet, where sellers choose a facilitator.
+   * Facilitator sellers use when they do not name one. Every preset names a Radius facilitator
+   * (the mainnet one for Radius and Base, the testnet one for Radius testnet and Base Sepolia);
+   * a custom network without one makes sellers choose a facilitator.
    */
   facilitatorUrl?: string;
   /** `chain.blockExplorers.default.url`, when the chain declares one. */
@@ -66,6 +72,11 @@ export interface PaymentNetwork {
   radius: boolean;
   /** Names x402 v1 challenges use for this network instead of CAIP-2 (e.g. `base`). */
   v1Names: readonly string[];
+  /**
+   * The preset in the other tier: the testnet of a mainnet preset and vice versa
+   * (`radius` ↔ `radius-testnet`, `base` ↔ `base-sepolia`). Unset for custom networks.
+   */
+  counterpart?: PresetName;
 }
 
 /** Radius mainnet (id 723487). Same values as viem's `radius`. */
@@ -140,8 +151,14 @@ export const PERMIT2_ADDRESS: Address = '0x000000000022D473030F116dDEE9F6B43aC78
 /** x402ExactPermit2Proxy — the Permit2 spender payers sign for in the `exact` scheme. */
 export const X402_EXACT_PERMIT2_PROXY: Address = '0x402085c248EeA27D92E8b30b2C58ed07f9E20001';
 
-/** Preset ids. `mainnet` / `testnet` are aliases of `radius` / `radius-testnet`. */
-export type NetworkName = 'radius' | 'radius-testnet' | 'base' | 'base-sepolia' | 'mainnet' | 'testnet';
+/** Preset ids, in `PRESET_NETWORKS` order. */
+export const PRESET_NAMES = ['radius', 'radius-testnet', 'base', 'base-sepolia'] as const;
+/** A preset id proper (no aliases). */
+export type PresetName = (typeof PRESET_NAMES)[number];
+/** Alternative names for presets: `mainnet` / `testnet` are Radius mainnet / testnet. */
+export const NETWORK_ALIASES = { mainnet: 'radius', testnet: 'radius-testnet' } as const satisfies Record<string, PresetName>;
+/** Preset ids, aliases included. */
+export type NetworkName = PresetName | keyof typeof NETWORK_ALIASES;
 
 /** Any EVM chain that can carry x402 payments. */
 export interface PaymentNetworkConfig {
@@ -160,6 +177,8 @@ export interface PaymentNetworkConfig {
   radius?: boolean;
   /** x402 v1 network names (see `PaymentNetwork.v1Names`). */
   v1Names?: readonly string[];
+  /** The preset in the other tier (see `PaymentNetwork.counterpart`). */
+  counterpart?: PresetName;
 }
 
 /** Anything `resolveNetwork` understands. Defaults to Radius mainnet when omitted. */
@@ -192,6 +211,7 @@ export function definePaymentNetwork(config: PaymentNetworkConfig): PaymentNetwo
     asset: config.asset,
     radius: config.radius ?? false,
     v1Names: config.v1Names ?? [],
+    counterpart: config.counterpart,
   });
 }
 
@@ -202,6 +222,7 @@ export const radiusMainnet: PaymentNetwork = definePaymentNetwork({
   faucetUrl: 'https://network.radiustech.xyz/api/v1/faucet',
   asset: SBC,
   radius: true,
+  counterpart: 'radius-testnet',
 });
 
 export const radiusTestnet: PaymentNetwork = definePaymentNetwork({
@@ -211,37 +232,51 @@ export const radiusTestnet: PaymentNetwork = definePaymentNetwork({
   faucetUrl: 'https://testnet.radiustech.xyz/api/v1/faucet',
   asset: SBC,
   radius: true,
+  counterpart: 'radius',
 });
 
 export const baseMainnet: PaymentNetwork = definePaymentNetwork({
   chain: baseChain,
   name: 'base',
+  facilitatorUrl: 'https://facilitator.radiustech.xyz',
   asset: USDC_BASE,
   v1Names: ['base'],
+  counterpart: 'base-sepolia',
 });
 
 export const baseSepolia: PaymentNetwork = definePaymentNetwork({
   chain: baseSepoliaChain,
   name: 'base-sepolia',
-  facilitatorUrl: 'https://x402.org/facilitator',
+  facilitatorUrl: 'https://facilitator.testnet.radiustech.xyz',
   asset: USDC_BASE_SEPOLIA,
   v1Names: ['base-sepolia'],
+  counterpart: 'base',
 });
 
-/** Every preset, Radius first. */
+/** Every preset, Radius first (the order of `PRESET_NAMES`). */
 export const PRESET_NETWORKS: readonly PaymentNetwork[] = [radiusMainnet, radiusTestnet, baseMainnet, baseSepolia];
 
-const PRESETS_BY_NAME: Record<NetworkName, PaymentNetwork> = {
-  radius: radiusMainnet,
-  mainnet: radiusMainnet,
-  'radius-testnet': radiusTestnet,
-  testnet: radiusTestnet,
-  base: baseMainnet,
-  'base-sepolia': baseSepolia,
-};
+const PRESETS_BY_NAME = presetsByName();
 
 /** Every preset id, aliases included. */
 export const NETWORK_NAMES = Object.keys(PRESETS_BY_NAME) as readonly NetworkName[];
+
+/** Index the presets by id and alias; a preset list that disagrees with `PRESET_NAMES` is a programming error. */
+function presetsByName(): Record<NetworkName, PaymentNetwork> {
+  const byName: Partial<Record<NetworkName, PaymentNetwork>> = {};
+  for (const preset of PRESET_NETWORKS) {
+    if (!PRESET_NAMES.includes(preset.name as PresetName)) throw new Error(`radius-sdk: preset '${preset.name}' is missing from PRESET_NAMES`);
+    byName[preset.name as PresetName] = preset;
+  }
+  for (const name of PRESET_NAMES) if (!byName[name]) throw new Error(`radius-sdk: PRESET_NAMES names '${name}', which is not in PRESET_NETWORKS`);
+  for (const [alias, name] of Object.entries(NETWORK_ALIASES)) byName[alias as NetworkName] = byName[name];
+  return byName as Record<NetworkName, PaymentNetwork>;
+}
+
+/** The preset in the other tier (mainnet ↔ testnet) of a preset, or undefined for a custom network. */
+export function counterpartOf(network: PaymentNetwork): PaymentNetwork | undefined {
+  return network.counterpart ? PRESETS_BY_NAME[network.counterpart] : undefined;
+}
 
 function isPaymentNetwork(v: unknown): v is PaymentNetwork {
   return typeof v === 'object' && v !== null && 'chain' in v && 'network' in v && 'asset' in v && 'v1Names' in v;
@@ -275,6 +310,7 @@ export function resolveNetwork(input?: NetworkInput, overrides?: NetworkOverride
     asset: overrides?.asset ? { ...base.asset, ...overrides.asset } : base.asset,
     radius: base.radius,
     v1Names: base.v1Names,
+    counterpart: base.counterpart,
   });
 }
 
@@ -304,7 +340,7 @@ export function explorerTxUrl(network: PaymentNetwork, txHash: string): string |
 /** Assemble a PaymentNetwork whose convenience fields are derived from `chain`. */
 function fromChain(
   chain: Chain,
-  rest: { name?: string; facilitatorUrl?: string; faucetUrl?: string; asset: PaymentAsset; radius: boolean; v1Names: readonly string[] },
+  rest: { name?: string; facilitatorUrl?: string; faucetUrl?: string; asset: PaymentAsset; radius: boolean; v1Names: readonly string[]; counterpart?: PresetName },
 ): PaymentNetwork {
   return {
     name: rest.name ?? chain.name,
@@ -319,6 +355,7 @@ function fromChain(
     testnet: chain.testnet ?? false,
     radius: rest.radius,
     v1Names: rest.v1Names,
+    ...(rest.counterpart ? { counterpart: rest.counterpart } : {}),
   };
 }
 

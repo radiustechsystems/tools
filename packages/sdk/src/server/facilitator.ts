@@ -3,7 +3,7 @@ import { SettleError, VerifyError, type PaymentPayload, type PaymentRequirements
 import type { PaymentNetwork } from '../networks.js';
 
 export interface FacilitatorOptions {
-  /** Facilitator base URL. Defaults to the network's (Radius's own; x402.org on Base Sepolia); required on Base. */
+  /** Facilitator base URL. Defaults to the network's (a Radius facilitator on every preset); required on a custom network without one. */
   url?: string;
   /** Sent as `x-api-key` on verify/settle/supported. */
   apiKey?: string;
@@ -36,8 +36,8 @@ export function staticSupported(network: PaymentNetwork): SupportedResponse {
 }
 
 /**
- * FacilitatorClient for a hosted x402 facilitator (the network's default: Radius's on Radius,
- * x402.org on Base Sepolia). Nothing runs at construction; the first `/supported` lookup happens
+ * FacilitatorClient for a hosted x402 facilitator (the network's default: a Radius facilitator on
+ * every preset). Nothing runs at construction; the first `/supported` lookup happens
  * lazily at request time (Cloudflare Workers forbid I/O at module scope).
  */
 export class RadiusFacilitatorClient implements FacilitatorClient {
