@@ -29,7 +29,7 @@ command -v radius-cli
 radius-cli --help
 ```
 
-Use `radius-cli` version `0.4.0` or later. From `0.3.0`, `wallet balance` reports {NATIVE_TOKEN} and {STABLECOIN} separately, and `wallet send` transfers any ERC-20. From `0.4.0`, `wallet pay` (formerly `wallet x402`, with `--threshold` and `--approve-permit2` formerly `--x402-threshold` and `--x402-approve-permit2`) also pays MPP challenges and USDC on Base. From `0.5.0`, `sell check` checks a seller's `402` before you deploy it. From `0.7.0`, `receipt --event` decodes logs, `wallet password` adds or changes the keystore password, and `wallet balance` prints one line per asset. Verify that your installed binary exposes the payment command:
+Use `radius-cli` version `0.4.0` or later. From `0.3.0`, `wallet balance` reports {NATIVE_TOKEN} and {STABLECOIN} separately, and `wallet send` transfers any ERC-20. From `0.4.0`, `wallet pay` (formerly `wallet x402`, with `--threshold` and `--approve-permit2` formerly `--x402-threshold` and `--x402-approve-permit2`) also pays MPP challenges and USDC on Base. From `0.5.0`, `sell check` checks a seller's `402` before you deploy it. From `0.7.0`, `receipt --event` decodes logs, `wallet password` adds or changes the keystore password, and `wallet balance` prints one line per asset. From `0.8.0`, `wallet approve`, `allowance`, `token`, `transfers` and `watch` cover ERC-20 approvals, token metadata and `Transfer` events. Verify that your installed binary exposes the payment command:
 
 ```bash
 radius-cli --version
@@ -155,6 +155,34 @@ radius-cli wallet send 0xTokenAddress "transfer(address,uint256)" 0xRecipientAdd
 ```
 
 Use `--json` for machine-readable output and `--no-wait` when you only need the submitted transaction hash.
+
+Approve a spender and check an allowance. The token defaults to {STABLECOIN}; pass `max` as the amount for an unlimited approval:
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
+  radius-cli wallet approve 0xSpenderAddress 25 SBC
+
+radius-cli wallet allowance 0xSpenderAddress SBC --owner 0xOwnerAddress --json
+```
+
+`approve` takes `--gas-limit` and `--no-wait` like `send` and prints `{hash, receipt?}` with `--json`. `allowance` reads the local account's allowance unless `--owner` names another account. You do not need `approve` to pay: `wallet pay` handles its Permit2 approval itself (see [Permit2 approval](#permit2-approval)).
+
+Read a token's name, symbol, decimals and total supply:
+
+```bash
+radius-cli wallet token
+radius-cli wallet token 0xTokenAddress --json
+```
+
+List past transfers and watch new ones:
+
+```bash
+radius-cli wallet transfers SBC --json
+radius-cli wallet transfers 0xTokenAddress --all --blocks 3600000
+radius-cli wallet watch SBC --json
+```
+
+Both commands decode ERC-20 `Transfer` events and default to transfers sent or received by the local account. Pass `--address` for another account, `--from` or `--to` for one side, or `--all` for every transfer of the token. Radius block numbers are unix milliseconds, so `transfers` searches the last 1 000 000 blocks (about 16.7 minutes) unless `--blocks`, `--from-block` or `--to-block` set the range; `--blocks 3600000` is the last hour. A range wider than about 11.5 days fails, so split longer ones. With `--json`, `transfers` prints `{token, symbol, fromBlock, toBlock, transfers}`. `watch` polls until Ctrl-C (`--poll <ms>` sets the interval), reports transfers about 5 seconds behind the head, and with `--json` prints one transfer object per line.
 
 ## Read commands
 
