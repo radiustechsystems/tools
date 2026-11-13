@@ -29,7 +29,7 @@ command -v radius-cli
 radius-cli --help
 ```
 
-Use `radius-cli` version `0.4.0` or later. From `0.3.0`, `wallet balance` reports {NATIVE_TOKEN} and {STABLECOIN} separately, and `wallet send` transfers any ERC-20. From `0.4.0`, `wallet pay` (formerly `wallet x402`, with `--threshold` and `--approve-permit2` formerly `--x402-threshold` and `--x402-approve-permit2`) also pays MPP challenges and USDC on Base. From `0.5.0`, `sell check` checks a seller's `402` before you deploy it. From `0.7.0`, `receipt --event` decodes logs, `wallet password` adds or changes the keystore password, and `wallet balance` prints one line per asset. Verify that your installed binary exposes the payment command:
+Use `radius-cli` version `0.4.0` or later. From `0.3.0`, `wallet balance` reports {NATIVE_TOKEN} and {STABLECOIN} separately, and `wallet send` transfers any ERC-20. From `0.4.0`, `wallet pay` (formerly `wallet x402`, with `--threshold` and `--approve-permit2` formerly `--x402-threshold` and `--x402-approve-permit2`) also pays MPP challenges and USDC on Base. From `0.5.0`, `sell check` checks a seller's `402` before you deploy it. From `0.7.0`, `receipt --event` decodes logs, `wallet password` adds or changes the keystore password, and `wallet balance` prints one line per asset. From `0.8.0`, `wallet send` prints an explorer link and `wallet export --yes` prints the key without a prompt. Verify that your installed binary exposes the payment command:
 
 ```bash
 radius-cli --version
@@ -154,7 +154,23 @@ Call an arbitrary state-changing contract function:
 radius-cli wallet send 0xTokenAddress "transfer(address,uint256)" 0xRecipientAddress 100000
 ```
 
-Use `--json` for machine-readable output and `--no-wait` when you only need the submitted transaction hash.
+After the receipt, `wallet send` prints the hash, status, block, gas used, and an `Explorer:` link to the transaction. With `--json`, the output is `{hash, receipt, explorerUrl}`.
+
+Use `--no-wait` when you only need the submitted transaction hash. The text output is then the bare hash on stdout, with the explorer link on stderr, so `hash=$(radius-cli wallet send … --no-wait)` captures the hash alone. With `--json`, the output is `{hash, explorerUrl}`.
+
+Export the private key:
+
+```bash
+radius-cli wallet export
+```
+
+`wallet export` asks before it prints the raw private key. Agents and scripts pass `--yes` (or `-y`) to skip the prompt:
+
+```bash
+RADIUS_HOME=.radius radius-cli wallet export --yes --json
+```
+
+With `--json`, the output is `{address, privateKey}`. Without `--yes`, the command waits for an answer on stdin: with stdin at end of input it exits `1`, and with stdin open but silent it waits indefinitely. If the keystore has a password, set `RADIUS_PASSWORD` as well, or `wallet export` prompts for it. Send the output straight to a secret manager, not to a log.
 
 ## Read commands
 
