@@ -60,9 +60,28 @@ export interface SellCheckReport {
   /** Facilitators whose `/supported` was read, by URL. */
   facilitators: Record<string, { ok: boolean; kinds?: string[]; extensions?: string[]; error?: string }>;
   payment?: { paid: boolean; status: number; protocol?: string; network?: string; amount?: string; payTo?: string; txHash?: string; payer?: string };
+  /** Present when unpaid requests were served free under a rate-limit (free quota) before any 402. */
+  freeQuota?: FreeQuota;
   checks: Check[];
   summary: Record<CheckStatus, number>;
 }
+
+/** What the RateLimit headers of the free (2xx) unpaid answers said, and how many there were. */
+export interface FreeQuota {
+  /** `RateLimit-Limit`: requests per window. */
+  limit?: number;
+  /** `RateLimit-Remaining` on the last free answer. */
+  remaining?: number;
+  /** `RateLimit-Reset` on the last free answer, in seconds. */
+  resetSeconds?: number;
+  /** Unpaid requests answered 2xx before the 402 (or before giving up). */
+  served: number;
+  /** True when a later unpaid request answered 402. */
+  exhausted: boolean;
+}
+
+/** Default for `freeRequests`: the most extra unpaid requests spent working through a free quota. */
+export const DEFAULT_FREE_REQUESTS = 25;
 
 export interface SellCheckOptions {
   url: string;
@@ -80,6 +99,12 @@ export interface SellCheckOptions {
   radiusAssetAddress?: `0x${string}`;
   /** Also send an unpaid HEAD and warn when it is served. */
   probeHead?: boolean;
+  /**
+   * When the unpaid request is served (2xx) with RateLimit headers that show a free quota, send up
+   * to this many more unpaid requests to use it up and reach the 402 (default 25). Sent only when
+   * `RateLimit-Remaining` fits: remaining + 1 requests. 0 reports the quota without spending it.
+   */
+  freeRequests?: number;
   /** Make one paid request. */
   pay?: {
     networks: PaymentNetwork[];
@@ -171,6 +196,28 @@ function expectedAmount(price: string, asset: { address: `0x${string}`; decimals
   }
 }
 
+const INTEGER = /^\s*(\d+)\s*$/;
+
+/**
+ * The `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` headers (IETF httpapi
+ * ratelimit-headers, as separate fields), or their common `X-RateLimit-*` forms; undefined when
+ * there is no `Remaining`, which is what tells a free quota from a route that is simply free.
+ */
+export function readRateLimit(headers: Headers): { limit?: number; remaining: number; resetSeconds?: number } | undefined {
+  const num = (name: string) => {
+    const m = INTEGER.exec(headers.get(`ratelimit-${name}`) ?? headers.get(`x-ratelimit-${name}`) ?? '');
+    return m ? Number(m[1]) : undefined;
+  };
+  const remaining = num('remaining');
+  if (remaining === undefined) return undefined;
+  return { limit: num('limit'), remaining, resetSeconds: num('reset') };
+}
+
+function quotaText(q: { limit?: number; remaining?: number; resetSeconds?: number }): string {
+  const parts = [q.limit !== undefined ? `limit ${q.limit}` : undefined, q.remaining !== undefined ? `${q.remaining} remaining` : undefined, q.resetSeconds !== undefined ? `resets in ${q.resetSeconds} s` : undefined];
+  return parts.filter(Boolean).join(', ');
+}
+
 function withTimeout(fetchFn: typeof globalThis.fetch, ms: number): typeof globalThis.fetch {
   return (input, init) => fetchFn(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(ms) });
 }
@@ -201,18 +248,61 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
     add('status', 'fail', `request failed: ${(e as Error).message}`);
     return finish();
   }
+  // 1a. A free quota: the route is paid, but the first unpaid requests in each window are served.
+  // The RateLimit headers say so; use the quota up (bounded) to reach the 402, or report it.
+  const isServed = (r: Response) => r.status >= 200 && r.status < 300;
+  let quota = isServed(first) ? readRateLimit(first.headers) : undefined;
+  if (quota) {
+    const budget = options.freeRequests ?? DEFAULT_FREE_REQUESTS;
+    const free: FreeQuota = { ...quota, served: 1, exhausted: false };
+    report.freeQuota = free;
+    const seen = () => `unpaid ${method} answered ${first.status} with RateLimit headers (${quotaText(free)}): a free quota`;
+    if (budget === 0) {
+      add('free-quota', 'info', `${seen()}, not used up (--free-requests 0), so the 402 was not checked`);
+      report.status = first.status;
+      return finish();
+    }
+    if (quota.remaining + 1 > budget) {
+      add('free-quota', 'warn', `${seen()}; reaching the 402 takes ${quota.remaining + 1} more unpaid requests, more than --free-requests ${budget}, so the 402 was not checked (raise --free-requests, or wait for the reset)`);
+      report.status = first.status;
+      return finish();
+    }
+    for (let sent = 0; sent < budget && quota && isServed(first); sent++) {
+      await first.arrayBuffer().catch(() => undefined);
+      try {
+        first = await baseFetch(request());
+      } catch (e) {
+        add('status', 'fail', `request ${free.served + 1} failed: ${(e as Error).message}`);
+        return finish();
+      }
+      quota = isServed(first) ? readRateLimit(first.headers) : undefined;
+      if (isServed(first)) {
+        free.served++;
+        if (quota) Object.assign(free, quota);
+      }
+    }
+    free.exhausted = first.status === 402;
+    if (free.exhausted) add('free-quota', 'info', `free quota: ${free.served} unpaid ${method} request${free.served === 1 ? ' was' : 's were'} served (${quotaText(free)}), then 402`);
+    else if (isServed(first)) {
+      add('free-quota', 'warn', `${seen()}; still served after ${free.served} unpaid requests (--free-requests ${budget}), so the 402 was not checked`);
+      report.status = first.status;
+      return finish();
+    }
+  }
   const firstBody = new Uint8Array(await first.arrayBuffer());
   report.status = first.status;
   if (first.status !== 402) {
-    const why = first.status >= 200 && first.status < 300
-      ? 'the route is served without payment (is it listed in routes, with the same method and path?)'
+    const why = isServed(first)
+      ? "the route is served without payment and without RateLimit headers, so it is not a free quota: check that the seller's paid routes include it, with the same method and path"
       : first.status >= 300 && first.status < 400
         ? `redirected to ${first.headers.get('location') ?? '(no Location)'}; check the final URL`
-        : 'expected 402 Payment Required';
+        : first.status === 429
+          ? `rate limited${first.headers.get('retry-after') ? ` (Retry-After ${first.headers.get('retry-after')})` : ''}; wait and run it again`
+          : 'expected 402 Payment Required';
     add('status', 'fail', `unpaid ${method} answered ${first.status}: ${why}`);
     return finish();
   }
-  add('status', 'pass', `unpaid ${method} answers 402`);
+  add('status', 'pass', `unpaid ${method} answers 402${report.freeQuota ? ` once the free quota is used up` : ''}`);
   const cacheControl = first.headers.get('cache-control') ?? '';
   if (/no-store/i.test(cacheControl)) add('cache', 'pass', 'the 402 is marked Cache-Control: no-store');
   else add('cache', 'warn', `the 402 has Cache-Control "${cacheControl}"; a shared cache could serve a stale challenge`);
@@ -403,10 +493,10 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
     }
   }
 
-  // 6. MPP challenges (radiusPayments() and radius-sdk/hono with `mpp: { secretKey }`).
+  // 6. MPP challenges (`WWW-Authenticate: Payment`), whoever serves them.
   const mppChallenges: MppChallenge[] = parseMppChallenges(first.headers.get('www-authenticate'));
   if (mppChallenges.length === 0) {
-    add('mpp', 'info', 'no MPP challenge (WWW-Authenticate: Payment); add mpp: { secretKey } to radiusPayments() or radius-sdk/hono to accept MPP (the upstream x402 adapters serve x402 only)');
+    add('mpp', 'info', 'no MPP challenge (WWW-Authenticate: Payment): buyers can pay over x402 only. MPP is optional and enabled in the seller\'s payment setup (with radius-sdk: mpp: { secretKey } in radiusPayments() or radius-sdk/hono)');
   } else {
     add('mpp', 'pass', `${mppChallenges.length} MPP challenge${mppChallenges.length === 1 ? '' : 's'}`);
   }

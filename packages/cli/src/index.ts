@@ -23,6 +23,7 @@ program
   .option('--network <name>', "'mainnet' or 'testnet' (default: mainnet)")
   .option('--rpc-url <url>', 'override the RPC URL')
   .option('--private-key <hex>', 'sign with this key instead of the local keystore')
+  .option('--password-file <path>', 'read the keystore password from this file (one trailing newline is ignored); else RADIUS_PASSWORD, else a prompt on a terminal')
   .option('--sbc <address>', 'override the SBC token contract address')
   .option('--rusd <address>', 'override the RUSD ERC-20 contract address')
   .option('--json', 'machine-readable JSON output');
