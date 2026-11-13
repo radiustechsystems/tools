@@ -1,0 +1,101 @@
+---
+title: Agent spend policy
+description: Limit what an agent pays on Radius. radius-sdk and radius-cli cap each request today; cumulative budgets, seller allowlists, and auto top-up are proposed.
+---
+
+# Agent spend policy [Per-request caps today, budgets proposed]
+
+A spend policy decides which payments an agent may make. Today, `radius-sdk` and `radius-cli` enforce a cap on each request, and your code can add rules of its own before anything is signed. Budgets across requests, seller allowlists, and automatic top-up are proposed and not built into either tool yet.
+
+Sellers have their own policy, set in the Radius Platform: prices, free quotas, and rate limits.
+
+## Today: buyer limits
+
+### radius-sdk
+
+`createRadiusFetch` from `radius-sdk/client` takes two controls:
+
+- **`maxPerRequest`** (required): the most one request may pay, such as `'0.01 SBC'`. An offer above it is refused before signing, with the error code `price_above_limit`. For an `upto` offer, the authorized maximum is compared, not the expected charge.
+- **`onPaymentRequired(offer)`** (optional): runs after an offer passes the built-in checks and before anything is signed. Return `false`, or a promise of `false`, to decline; the client throws `RadiusPaymentError` with the code `declined`. The offer carries `payTo`, `amount` (base units; for `upto`, the maximum), `amountFormatted`, `scheme`, `protocol`, `network`, and `resource.url`.
+
+The client also pays only on the networks and in the assets you configure, and `onApprovalRequired` gates every allowance change it would make. See [make payments](/build/make-payments#limit-what-you-pay) and the [`createRadiusFetch` reference](/reference/radius-sdk#createradiusfetch).
+
+### radius-cli
+
+`radius-cli wallet pay` has one limit, `--threshold`, in display units of the payment asset. With `-y`, it is a hard cap: an offer above it is refused with exit code 2 instead of a prompt. Without `-y`, the CLI asks on a terminal and refuses without one. For `upto`, the threshold is compared with the maximum. There is no setting for a total, and no configuration file or environment variable for the threshold. See [spending limits](/reference/radius-cli#spending-limits).
+
+### Neither is a budget
+
+`maxPerRequest` and `--threshold` limit each payment. An agent that loops can make any number of payments under the cap. A total, a per-seller limit, or an allowlist is code you write, in the component that signs.
+
+## Approximate a budget with onPaymentRequired
+
+`onPaymentRequired` can enforce a seller allowlist and a daily budget per seller. This example reserves each offer's amount before signing, and returns the unused part of an `upto` reservation when the receipt reports a smaller charge:
+
+```typescript
+import { createRadiusFetch } from 'radius-sdk/client';
+
+const DAILY_LIMIT = 1_000_000n; // 1 SBC per seller per day, in base units
+const ALLOWED_SELLERS = new Set(['0xSellerAddress'.toLowerCase()]);
+const spent = new Map<string, bigint>();
+
+const budgetKey = (payTo: string) => `${new Date().toISOString().slice(0, 10)}:${payTo.toLowerCase()}`;
+
+const payFetch = createRadiusFetch({
+  network: 'testnet',
+  signer: process.env.RADIUS_PRIVATE_KEY as `0x${string}`,
+  maxPerRequest: '0.01 SBC',
+  onPaymentRequired: (offer) => {
+    if (!ALLOWED_SELLERS.has(offer.payTo.toLowerCase())) return false;
+    const key = budgetKey(offer.payTo);
+    const total = (spent.get(key) ?? 0n) + BigInt(offer.amount);
+    if (total > DAILY_LIMIT) return false;
+    spent.set(key, total); // reserve before signing; for upto, the maximum
+    return true;
+  },
+  onPaid: (receipt, offer) => {
+    if (receipt.amount === undefined) return;
+    const unused = BigInt(offer.amount) - BigInt(receipt.amount);
+    const key = budgetKey(offer.payTo);
+    if (unused > 0n) spent.set(key, (spent.get(key) ?? 0n) - unused);
+  },
+});
+```
+
+Check and reserve in the same synchronous step, as here, so concurrent requests cannot both pass the check. The approximation has limits:
+
+- **It is per process.** The map is lost on restart and is not shared between processes. Keep the totals in a store that survives restarts, and reserve atomically there, when the agent runs on more than one instance.
+- **Failed payments stay reserved.** A payment declined by the server or lost to a timeout keeps its reservation, which errs toward spending less. Release it only after you confirm it did not settle; see [when the outcome is uncertain](/build/make-payments#when-the-outcome-is-uncertain).
+- **It only binds this client.** Software with the private key can sign payments elsewhere. Keep the key in the tool that enforces the policy, not with the model.
+
+With `radius-cli`, enforce the same rules in the tool runner that calls `wallet pay`: check the URL and running total before each call, and add `payment.amount` from the `--json` output afterwards.
+
+## Today: seller policy
+
+A seller that uses the [Merchant Console](/merchant-console) sets its policy in the Radius Platform, and `@radiustech/platform-sdk` enforces it in the seller's Worker. Each rule matches an endpoint and can set:
+
+- **A price:** the request is charged over x402 with the `exact` scheme, in the networks and assets the policy accepts.
+- **A free quota:** a number of requests per time window that are allowed free, counted per IP address, per caller, or globally. Beyond it, the rule's action applies, such as its price.
+- **A rate limit:** requests beyond it are refused with `429`.
+- **Allow or deny:** the request passes free or is refused.
+
+These rules protect the seller, not the buyer. An agent still needs its own limits. With `radius-sdk` alone, a seller sets a price per route, as in [accept payments](/build/accept-payments).
+
+## Proposed
+
+:::note[Under design]
+The features below are proposals, not implemented in `radius-sdk`, `radius-cli`, or the Radius Platform. Whether they belong in `radius-cli` or in a separate policy engine has not been decided.
+:::
+
+- **Cumulative budgets:** a total per seller, per day, or per task, enforced by the payment tool and kept across restarts.
+- **Seller allowlists:** a list of recipients or origins the agent may pay, with every other offer refused before signing.
+- **Low-balance hooks and auto top-up:** a callback when the wallet's balance drops below a level, and an option to refill it from a funding source so that a long-running agent is not interrupted.
+
+Until then, check the balance yourself with `payFetch.balance()` or `radius-cli wallet balance --json`. When the client pays on several networks, it skips networks whose balance does not cover an offer and throws `insufficient_balance` when none does. With one network, a short balance fails at settlement.
+
+## Next steps
+
+- [Set up an agent to pay](/build/make-payments/agents) — Skills, a wallet, and a payment tool for an agent
+- [Make payments](/build/make-payments) — `createRadiusFetch`, limits, errors, and receipts
+- [Metered and session payments](/build/metered-payments) — `upto`, interval payments, and what is planned
+- [radius-cli reference](/reference/radius-cli#paid-endpoints) — `wallet pay` flags and output
