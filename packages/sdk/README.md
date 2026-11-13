@@ -564,6 +564,7 @@ the handler as `settle` says. The handler's `payment` and `onSettled` receive th
 `protocol: 'mpp'`, and the response carries `Payment-Receipt`. MPP is served by
 `radiusPayments()` (web-standard and Hono); routes mounted through the upstream x402 adapters only
 see x402. Interop is tested against `mppx`, the reference implementation, in both directions.
+`examples/mpp` runs a seller and an MPP buyer end to end.
 
 ## Layout
 
@@ -575,6 +576,7 @@ see x402. Interop is tested against `mppx`, the reference implementation, in bot
 | `examples/express-seller` | Same API on Express through `@x402/express` (`pnpm --filter radius-express-seller start`, port 8789) |
 | `examples/astro-seller` | Astro API route: validate the article before charging, then deliver it paid (`pnpm --filter radius-astro-seller dev`, port 8790) |
 | `examples/agent-buyer` | `buy.mjs` (pay a URL), `fresh-wallet.mjs` (gasless proof from a new wallet), `permit2-pull.mjs` (sign a Permit2 transfer off-chain, pull it from another account) |
+| `examples/mpp` | MPP seller and buyer: `pnpm --filter radius-mpp-example demo` pays an MPP charge end to end against a local facilitator (no funds); `seller` and `buy` run it on testnet |
 | `examples/demo-dapp` | Test-dapp style page exercising both sides in the browser (burner wallet or MetaMask) |
 | `test/` | unit tests (facilitator and RPC mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM; `erc20.semantics.test.ts` runs the ERC-20 actions against `evmNode.ts`, a JSON-RPC node backed by @ethereumjs/evm executing the forge-compiled `fixtures/TestToken` (rebuild with `fixtures/build.sh` after editing the .sol; the artifact is committed because CI has no forge); `mpp*.test.ts` check MPP against `mppx`, the reference implementation, in both directions); `test/e2e` real settlement, balance reconciliation and ERC-20 round trips on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
 

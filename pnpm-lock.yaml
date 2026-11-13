@@ -300,6 +300,34 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  packages/sdk/examples/mpp:
+    dependencies:
+      '@hono/node-server':
+        specifier: ^2.1.5
+        version: 2.1.5(hono@4.13.8)
+      '@x402/core':
+        specifier: 2.29.0
+        version: 2.29.0
+      '@x402/evm':
+        specifier: 2.29.0
+        version: 2.29.0(typescript@5.9.3)
+      hono:
+        specifier: ^4.13.7
+        version: 4.13.8
+      radius-sdk:
+        specifier: workspace:*
+        version: link:../..
+      viem:
+        specifier: ^2.48.11
+        version: 2.57.1(typescript@5.9.3)(zod@4.6.7)
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.19.0
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   packages/sdk/examples/worker-plain:
     dependencies:
       '@x402/core':

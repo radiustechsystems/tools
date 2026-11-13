@@ -1,6 +1,6 @@
 ---
 title: Example projects
-description: Runnable radius-sdk examples for selling and buying with x402 on Radius, maintained alongside the SDK.
+description: Runnable radius-sdk examples for selling and buying with x402 and MPP on Radius, maintained alongside the SDK.
 ---
 
 # Example projects [Runnable radius-sdk examples]
@@ -14,4 +14,23 @@ These examples live in the [`tools` repository](https://github.com/radiustechsys
 | `express-seller` | The same API on Express through `@x402/express`                                               | [Accept payments](/build/accept-payments)               |
 | `astro-seller`   | An Astro API route that validates the article before charging, then delivers it               | [Content access](/build/examples/pay-per-visit-content) |
 | `agent-buyer`    | Node scripts that pay a URL, including from a fresh SBC-only wallet                           | [Make payments](/build/make-payments)                   |
+| `mpp`            | An MPP seller and buyer, runnable without funds against a local facilitator                   | [MPP](/reference/radius-sdk#mpp)                        |
 | `demo-dapp`      | Both sides in one Worker: a browser buyer with a burner wallet or MetaMask, and priced routes | [Content access](/build/examples/pay-per-visit-content) |
+
+## Run the MPP example
+
+The [`mpp` example](https://github.com/radiustechsystems/tools/tree/main/packages/sdk/examples/mpp) charges 0.001 SBC per request over x402 and [MPP](/reference/radius-sdk#mpp), and pays the charge over MPP. From a clone of the `tools` repository:
+
+```bash
+pnpm install && pnpm build
+pnpm --filter radius-mpp-example demo
+```
+
+The demo runs the seller and the buyer in one process. It shows the unpaid `402`, which carries both an x402 offer and a `WWW-Authenticate: Payment` challenge. Then a throwaway key signs an EIP-3009 authorization bound to that challenge, the seller settles it, and the response carries `Payment-Receipt`. The demo settles through a local stand-in for the facilitator that checks the signature but moves nothing on chain, so the buyer needs no funds.
+
+To settle on testnet, run the seller without the local facilitator and pay with a testnet key that holds SBC. `--fund` asks the [testnet faucet](/build/wallet) for SBC first:
+
+```bash
+PAY_TO=0xYourWalletAddress MPP_SECRET_KEY="$(openssl rand -base64 32)" pnpm --filter radius-mpp-example seller
+RADIUS_PRIVATE_KEY=0xYourTestnetKey pnpm --filter radius-mpp-example buy -- --fund
+```
