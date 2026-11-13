@@ -1,6 +1,6 @@
 # Radius developer docs
 
-Source of [docs.radiustech.xyz](https://docs.radiustech.xyz), built with [Vocs](https://vocs.dev). The site imports `radius-sdk` from this workspace and publishes the skills in `plugins/radius/skills` at `/skills/<name>.md`.
+Source of [docs.radiustech.xyz](https://docs.radiustech.xyz), built with [Vocs](https://vocs.dev). The site imports `radius-sdk` from this workspace and publishes the skills in `plugins/radius/skills` at `/skills/<name>.md` and under `/.well-known/agent-skills/` (an Agent Skills Discovery index with SHA-256 digests, and each skill at `<name>/SKILL.md`), generated at build by `scripts/generate-skills-md.ts`. The `radiustechsystems/.well-known` repo mirrors the index on `radiustech.xyz`.
 
 ## Commands
 
@@ -22,7 +22,7 @@ CI (`.github/workflows/docs.yml`) runs format, lint, typecheck, the validators a
 
 ## Hosting and releases
 
-The site is a Cloudflare Worker (`wrangler.jsonc`): Workers static assets serve `dist/public`, including `public/_redirects` and `public/_headers` (`noindex` on `workers.dev` hosts, so previews and the pre-cutover site stay out of search results), and `worker/index.ts` handles `/api/try/*`, the backend of the interactive "Try Radius" components (a testnet faucet proxy and priced testnet routes built with `radius-sdk/hono`). Pages and the agent-facing files (`*.md`, `llms.txt`, `llms-full.txt`, `robots.txt`, sitemaps, the `release-notes.xml` feed) also pass through the Worker, which serves them from static assets, gives a page's Markdown twin to requests that ask for `text/markdown`, and records agent requests in Workers Logs and the `docs_agent_fetches` Analytics Engine dataset: browser analytics never see agents. Browser page loads that carry an agent signal, plus a one-in-10 sample of the rest, go to `docs_browser_signals`, to measure agents that drive a real browser. Scripts, styles and images stay asset-first.
+The site is a Cloudflare Worker (`wrangler.jsonc`): Workers static assets serve `dist/public`, including `public/_redirects` and `public/_headers` (`noindex` on `workers.dev` hosts, so previews and the pre-cutover site stay out of search results), and `worker/index.ts` handles `/api/try/*`, the backend of the interactive "Try Radius" components (a testnet faucet proxy and priced testnet routes built with `radius-sdk/hono`). Pages and the agent-facing files (`*.md`, `llms.txt`, `llms-full.txt`, `robots.txt`, sitemaps, the `release-notes.xml` feed, `/.well-known/agent-skills/`) also pass through the Worker, which serves them from static assets, gives a page's Markdown twin to requests that ask for `text/markdown`, and records agent requests in Workers Logs and the `docs_agent_fetches` Analytics Engine dataset: browser analytics never see agents. Browser page loads that carry an agent signal, plus a one-in-10 sample of the rest, go to `docs_browser_signals`, to measure agents that drive a real browser. Scripts, styles and images stay asset-first.
 
 Production follows releases, not `main`, so the docs never describe a package version that is not on npm. `.github/workflows/docs-deploy.yml` builds and deploys, then moves the `docs-live` tag to the deployed commit:
 

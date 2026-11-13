@@ -6,3 +6,8 @@ https://:worker.:account.workers.dev/*
 # The release notes feed (scripts/generate-release-notes.ts) is Atom, not generic XML.
 /release-notes.xml
   Content-Type: application/atom+xml; charset=utf-8
+
+# The Agent Skills Discovery index (scripts/generate-skills-md.ts). The RFC asks for CORS so browser-based
+# clients can read it; static assets already serve .json as application/json.
+/.well-known/agent-skills/*
+  Access-Control-Allow-Origin: *
