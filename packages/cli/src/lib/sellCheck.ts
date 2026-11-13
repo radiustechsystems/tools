@@ -255,7 +255,7 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
     return p;
   };
   /** Kinds and extensions every facilitator that would settle `network` lists, or why none could be read. */
-  const facilitatorFor = async (network: PaymentNetwork): Promise<{ urls: string[]; kinds: SupportedResponse['kinds']; extensions: string[] } | { error: string; skip?: boolean }> => {
+  const facilitatorFor = async (network: PaymentNetwork): Promise<{ urls: string[]; defaulted: boolean; kinds: SupportedResponse['kinds']; extensions: string[] } | { error: string; skip?: boolean }> => {
     const urls = options.facilitators?.length ? options.facilitators : network.facilitatorUrl ? [network.facilitatorUrl] : [];
     if (urls.length === 0) return { error: `${network.name} has no default facilitator; pass --facilitator <url> (the one your seller settles through)`, skip: true };
     const settled = await Promise.allSettled(urls.map((u) => supportedFrom(network, u)));
@@ -264,7 +264,7 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
       const reasons = settled.map((s, i) => `${urls[i]}: ${s.status === 'rejected' ? (s.reason instanceof Error ? s.reason.message : String(s.reason)) : ''}`);
       return { error: `could not read /supported (${reasons.join('; ')})` };
     }
-    return { urls, kinds: ok.flatMap((s) => s.kinds), extensions: [...new Set(ok.flatMap((s) => s.extensions ?? []))] };
+    return { urls, defaulted: !options.facilitators?.length, kinds: ok.flatMap((s) => s.kinds), extensions: [...new Set(ok.flatMap((s) => s.extensions ?? []))] };
   };
 
   const offerNetworks: PaymentNetwork[] = [];
@@ -394,9 +394,12 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
       const onNetwork = fac.kinds.filter((k) => k.network === req.network);
       const match = onNetwork.find((k) => k.x402Version === version && k.scheme === req.scheme && (version === 1 || req.scheme === 'upto' || ((k.extra?.assetTransferMethod as string | undefined) ?? 'eip3009') === transfer));
       const where = fac.urls.join(', ');
+      // Without --facilitator the preset's default is read, which a seller deployed before the
+      // presets named one (SDK 0.8.0) may not use.
+      const hint = fac.defaulted ? "; checked the preset's default facilitator, pass --facilitator <url> if your seller settles through another" : '';
       if (match) add(`${at}.facilitator`, 'pass', `${where} supports ${kindLabel(match)}`);
-      else if (onNetwork.length === 0) add(`${at}.facilitator`, 'fail', `${where} does not support ${req.network} at all (lists ${fac.kinds.map(kindLabel).join(', ') || 'nothing'})`);
-      else add(`${at}.facilitator`, 'fail', `${where} does not support ${req.scheme}/${transfer} v${version} on ${req.network} (lists ${onNetwork.map(kindLabel).join(', ')})`);
+      else if (onNetwork.length === 0) add(`${at}.facilitator`, 'fail', `${where} does not support ${req.network} at all (lists ${fac.kinds.map(kindLabel).join(', ') || 'nothing'}${hint}`);
+      else add(`${at}.facilitator`, 'fail', `${where} does not support ${req.scheme}/${transfer} v${version} on ${req.network} (lists ${onNetwork.map(kindLabel).join(', ')}${hint}`);
       if (sponsoringDeclared && transfer === 'permit2' && !fac.extensions.includes('eip2612GasSponsoring')) {
         add(`${at}.gasSponsoring`, 'warn', `the 402 declares eip2612GasSponsoring but ${where} does not list it; first-time Permit2 payers will be rejected`);
       }

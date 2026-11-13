@@ -9,7 +9,10 @@ export {
   baseMainnet,
   baseSepolia,
   PRESET_NETWORKS,
+  PRESET_NAMES,
   NETWORK_NAMES,
+  NETWORK_ALIASES,
+  counterpartOf,
   radiusMainnetChain,
   radiusTestnetChain,
   baseChain,
@@ -21,7 +24,7 @@ export {
   chainIdFromCaip2,
   explorerTxUrl,
 } from './networks.js';
-export type { Address, Caip2, PaymentAsset, PaymentNetwork, PaymentNetworkConfig, NetworkName, NetworkInput, NetworkOverrides } from './networks.js';
+export type { Address, Caip2, PaymentAsset, PaymentNetwork, PaymentNetworkConfig, NetworkName, PresetName, NetworkInput, NetworkOverrides } from './networks.js';
 // Balance actions load viem, so their runtime exports live on `radius-sdk/client`; only the types are re-exported here.
 export type {
   AccountBalances,

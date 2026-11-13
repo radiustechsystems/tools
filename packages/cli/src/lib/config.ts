@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isAddress, type Address } from 'viem';
-import { radiusMainnetChain, radiusTestnetChain, resolveNetwork, SBC, type PaymentNetwork } from 'radius-sdk';
+import { counterpartOf, NETWORK_ALIASES, PRESET_NETWORKS, radiusMainnetChain, radiusTestnetChain, resolveNetwork, SBC, type PaymentNetwork, type PresetName } from 'radius-sdk';
 import type { GlobalOptions, NetworkName, ResolvedConfig } from '../types.js';
 
 const RADIUS_DIR = process.env.RADIUS_HOME ?? join(homedir(), '.radius');
@@ -16,10 +16,10 @@ interface FileConfig {
   rusdAddress?: string;
   cachedAddress?: string;
   passwordless?: boolean;
-  /** Networks `wallet pay` pays on, in preference order (default ['radius']). */
+  /** Networks `wallet pay` pays on, in preference order (default ['radius']); mainnet preset ids (see `PAY_NETWORKS`). */
   payNetworks?: string[];
   /** RPC URLs for non-Radius networks, by preset id: { "base": "https://…", "base-sepolia": "https://…" }. */
-  rpcUrls?: { base?: string; 'base-sepolia'?: string };
+  rpcUrls?: Partial<Record<RpcPreset, string>>;
 }
 
 function readFileConfig(): FileConfig {
@@ -68,15 +68,26 @@ export function radiusNetwork(cfg: ResolvedConfig): PaymentNetwork {
   return resolveNetwork(cfg.network, { rpcUrl: cfg.rpcUrl, asset: cfg.sbcAddress ? { address: cfg.sbcAddress } : undefined });
 }
 
-/** Networks `wallet pay` can pay on. `--network` picks mainnet or testnet for all of them. */
-export const PAY_NETWORKS = ['radius', 'base'] as const;
-export type PayNetworkName = (typeof PAY_NETWORKS)[number];
+/** The mainnet presets `wallet pay` can pay on (`radius`, `base`); `--network testnet` swaps each for its testnet counterpart. */
+const PAY_PRESETS: readonly PaymentNetwork[] = PRESET_NETWORKS.filter((n) => !n.testnet);
+/** Networks `wallet pay` can pay on, by mainnet preset id. `--network` picks mainnet or testnet for all of them. */
+export const PAY_NETWORKS: readonly PresetName[] = PAY_PRESETS.map((n) => n.name as PresetName);
+
+/** The presets whose RPC `rpcUrls` / `RADIUS_<PRESET>_RPC_URL` set: every one but Radius, which `rpcUrl` sets. */
+export type RpcPreset = Exclude<PresetName, (typeof NETWORK_ALIASES)[keyof typeof NETWORK_ALIASES]>;
+
+/** `RADIUS_BASE_SEPOLIA_RPC_URL` for `base-sepolia`: the env var that overrides a preset's RPC. */
+function rpcUrlEnvVar(preset: PaymentNetwork): string {
+  return `RADIUS_${preset.name.toUpperCase().replace(/-/g, '_')}_RPC_URL`;
+}
 
 /**
  * The networks `wallet pay` pays on, in preference order: `--networks`, else RADIUS_PAY_NETWORKS,
- * else `payNetworks` in the config file, else Radius only. Radius takes `--rpc-url` / `--sbc`;
- * Base takes RADIUS_BASE_RPC_URL or `rpcUrls.base`, Base Sepolia RADIUS_BASE_SEPOLIA_RPC_URL or
- * `rpcUrls["base-sepolia"]`: separate settings, so a mainnet RPC is never used for testnet.
+ * else `payNetworks` in the config file, else Radius only. Each name is a mainnet preset, swapped
+ * for its testnet counterpart under `--network testnet`. Radius takes `--rpc-url` / `--sbc`; every
+ * other preset takes `RADIUS_<PRESET>_RPC_URL` (`RADIUS_BASE_RPC_URL`, `RADIUS_BASE_SEPOLIA_RPC_URL`)
+ * or `rpcUrls["<preset>"]` in the config file: separate settings per preset, so a mainnet RPC is
+ * never used for testnet.
  */
 export function resolvePayNetworks(cfg: ResolvedConfig, flag?: string): PaymentNetwork[] {
   const file = readFileConfig();
@@ -84,13 +95,13 @@ export function resolvePayNetworks(cfg: ResolvedConfig, flag?: string): PaymentN
   const names = [...new Set(raw.split(',').map((n) => n.trim().toLowerCase()).filter(Boolean))];
   if (names.length === 0) throw new Error('--networks needs at least one network');
   return names.map((name) => {
-    if (name === 'radius') return radiusNetwork(cfg);
-    if (name === 'base') {
-      const testnet = cfg.network === 'testnet';
-      const rpcUrl = testnet ? (process.env.RADIUS_BASE_SEPOLIA_RPC_URL ?? file.rpcUrls?.['base-sepolia']) : (process.env.RADIUS_BASE_RPC_URL ?? file.rpcUrls?.base);
-      return resolveNetwork(testnet ? 'base-sepolia' : 'base', rpcUrl ? { rpcUrl } : undefined);
-    }
-    throw new Error(`--networks: unknown network '${name}' (use ${PAY_NETWORKS.join(', ')})`);
+    const mainnet = PAY_PRESETS.find((n) => n.name === name);
+    if (!mainnet) throw new Error(`--networks: unknown network '${name}' (use ${PAY_NETWORKS.join(', ')})`);
+    const preset = cfg.network === 'testnet' ? counterpartOf(mainnet) : mainnet;
+    if (!preset) throw new Error(`--networks: ${name} has no testnet counterpart`);
+    if (preset.radius) return radiusNetwork(cfg);
+    const rpcUrl = process.env[rpcUrlEnvVar(preset)] ?? file.rpcUrls?.[preset.name as RpcPreset];
+    return resolveNetwork(preset.name as PresetName, rpcUrl ? { rpcUrl } : undefined);
   });
 }
 

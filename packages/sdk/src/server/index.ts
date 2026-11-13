@@ -59,7 +59,7 @@ export interface RoutesOptions<Ctx> {
 /** One network a server accepts payment on, with the facilitator that settles it. */
 export interface ServerNetwork {
   network: NetworkInput;
-  /** Defaults to the network's facilitator (Radius's on Radius, x402.org on Base Sepolia); required on Base. */
+  /** Defaults to the network's facilitator (a Radius facilitator on every preset); required on a custom network without one. */
   facilitator?: FacilitatorOptions | FacilitatorClient;
 }
 
@@ -69,7 +69,7 @@ export interface RadiusServerOptions extends NetworkOverrides {
   /**
    * Several networks to accept payment on (instead of `network`): every route offers one payment
    * option per network, in this order. Give a network its own facilitator with
-   * `{ network, facilitator }`; Base has no default, so it needs one. Top-level `facilitator`
+   * `{ network, facilitator }`; every preset names one (the Radius facilitators). Top-level `facilitator`
    * and overrides (`rpcUrl`, `asset`, …) apply to the first network.
    */
   networks?: readonly (NetworkInput | ServerNetwork)[];

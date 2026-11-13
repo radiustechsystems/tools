@@ -213,8 +213,8 @@ assertRadiusSupported(server, radius);   // throws if no facilitator reported `e
   `FacilitatorResponseError`: the outcome is unknown, and a settle may have reached the chain.
   Answer with a 5xx, not as a rejected payment.
 - You build the routes and 402s, so declare `eip2612GasSponsoring` yourself if you want it (the
-  scheme removes the declaration when the facilitator does not support it). Base needs its own
-  facilitator: `networks: [{ network: 'base', facilitator: { url } }]`.
+  scheme removes the declaration when the facilitator does not support it). To settle Base
+  elsewhere than the Radius facilitator: `networks: [{ network: 'base', facilitator: { url } }]`.
 - `networks` takes the same entries as `createRadiusServer`, default Radius mainnet; `gasSponsoring`
   is the same option.
 
@@ -453,12 +453,16 @@ tokens are reported in `tokens` but not valued 1:1 in `total`.
 
 ## Networks and currency
 
-| Preset | Chain | Asset | Default facilitator |
-| --- | --- | --- | --- |
-| `'mainnet'` / `'radius'` (default) | Radius, 723487 | SBC | Radius |
-| `'testnet'` / `'radius-testnet'` | Radius testnet, 72344 | SBC | Radius testnet |
-| `'base'` | Base, 8453 | USDC | none: sellers name one |
-| `'base-sepolia'` | Base Sepolia, 84532 | USDC | x402.org |
+<!-- networks:start -->
+
+| Preset                             | Chain                      | Asset | Default facilitator                |
+| ---------------------------------- | -------------------------- | ----- | ---------------------------------- |
+| `'mainnet'` / `'radius'` (default) | Radius Network, 723487     | SBC   | facilitator.radiustech.xyz         |
+| `'testnet'` / `'radius-testnet'`   | Radius Test Network, 72344 | SBC   | facilitator.testnet.radiustech.xyz |
+| `'base'`                           | Base, 8453                 | USDC  | facilitator.radiustech.xyz         |
+| `'base-sepolia'`                   | Base Sepolia, 84532        | USDC  | facilitator.testnet.radiustech.xyz |
+
+<!-- networks:end -->
 
 ```ts
 import { radiusTestnet, baseSepolia, definePaymentNetwork, resolveNetwork } from 'radius-sdk';
@@ -492,12 +496,12 @@ and `asset` overrides. USD prices (`'$0.01'`) are converted with the asset's dec
 USD-pegged asset, which every preset is.
 
 **Accepting more than one network.** `networks` instead of `network` makes every route offer one
-payment option per network, in that order, each settled by its own facilitator. Base mainnet has
-no default facilitator, so name one:
+payment option per network, in that order, each settled by its own facilitator. The Radius
+facilitator settles Base too; name another one per network to settle elsewhere:
 
 ```ts
 const pay = radiusPayments({
-  networks: ['mainnet', { network: 'base', facilitator: { url: 'https://your-base-facilitator.example' } }],
+  networks: ['mainnet', 'base'],   // or { network: 'base', facilitator: { url: 'https://your-base-facilitator.example' } }
   payTo: '0xYourWallet',   // same address on every EVM chain
   routes: { 'GET /api/lookup': '$0.001' },   // 0.001 SBC on Radius, 0.001 USDC on Base
 });
@@ -547,7 +551,7 @@ header is not paid over MPP. MPP payments need no approval and no gas.
 
 ```ts
 const pay = radiusPayments({
-  networks: ['mainnet', { network: 'base', facilitator: { url: 'https://your-base-facilitator.example' } }],
+  networks: ['mainnet', 'base'],
   payTo: '0xYourWallet',
   routes: { 'GET /api/lookup': '$0.001' },
   mpp: { secretKey: env.MPP_SECRET_KEY },   // ≥ 32 random characters: `openssl rand -base64 32`

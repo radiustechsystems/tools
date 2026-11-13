@@ -25,10 +25,14 @@ Requires Node ≥ 22.
 
 ## Networks
 
-| Network | Chain ID | Default RPC |
-|---|---|---|
-| `mainnet` *(default)* | 723487 | `https://rpc.radiustech.xyz` |
-| `testnet` | 72344 | `https://rpc.testnet.radiustech.xyz` |
+<!-- networks:start -->
+
+| Network               | Chain ID | Default RPC                          |
+| --------------------- | -------- | ------------------------------------ |
+| `mainnet` _(default)_ | 723487   | `https://rpc.radiustech.xyz`         |
+| `testnet`             | 72344    | `https://rpc.testnet.radiustech.xyz` |
+
+<!-- networks:end -->
 
 Override the URL with `--rpc-url` or `RADIUS_RPC_URL` if you want to point at a different endpoint.
 
