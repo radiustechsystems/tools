@@ -186,10 +186,9 @@ Expect `ready`. The readiness check answers once the gateway has fetched the pol
 
 ### 4. Send your traffic through it
 
-Proxy to the gateway instead of your API, and pass each caller's address.
+Proxy to the gateway instead of your API, and pass each caller's address. In nginx, change your site's server block:
 
 ```diff
- # nginx: your site's server block
  location / {
 -  proxy_pass http://127.0.0.1:3000;
 +  proxy_pass http://127.0.0.1:8080;
@@ -198,8 +197,9 @@ Proxy to the gateway instead of your API, and pass each caller's address.
  }
 ```
 
+In a Caddyfile, change your site's block:
+
 ```diff
- # Caddyfile: your site's block
  api.example.com {
 -  reverse_proxy 127.0.0.1:3000
 +  reverse_proxy 127.0.0.1:8080 {
