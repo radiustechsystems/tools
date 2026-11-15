@@ -1,0 +1,101 @@
+---
+title: Publish pricing.md
+description: Publish a Merchant Console project's catalog to pricing.md, the Markdown price list agents read, and serve it on your own domain from your Worker.
+---
+
+# Publish pricing.md [The price list agents read]
+
+`pricing.md` is a Markdown file that lists your paid endpoints, what each costs, the tokens it accepts and where to send requests. Agents read it to find out what you sell before they call.
+
+Radius builds the file from your policy, so it changes when your prices do.
+
+## What the file lists
+
+Your organization has one `pricing.md` with a section per published catalog. A catalog is one project's paid endpoints.
+
+```md
+# Example Inc. pricing
+
+## Reports API
+
+- Base URL: https://api.example.com
+- Payment: x402, SBC on Radius or USDC on Base
+
+### Report lookup
+
+- Request: GET /reports/:id
+- Price: $0.002 / request
+```
+
+An endpoint with a free allowance or a rate limit also lists them, on `Free` and `Rate limit` lines. A catalog in test mode carries the line `Mode: test (no real money)`, so agents know nobody pays real money.
+
+## Publish a catalog
+
+1. Set the project's **Base URL** in its **Settings**. Without it, agents see prices but not where to call.
+2. Open the project's **Catalog** page.
+3. Select **Publish**.
+
+The status badge shows **Published**, **Not published**, or **Nothing to list** when no endpoint charges yet. **Unpublish** takes the catalog out of the file.
+
+To publish several projects at once, open the **pricing.md** menu on the organization overview and select **Manage**.
+
+Publishing needs the `endpoints:write` permission.
+
+## Where it is served
+
+| File                 | Address                                                | Served by                    |
+| -------------------- | ------------------------------------------------------ | ---------------------------- |
+| Organization's file  | `https://app.radiustech.xyz/<organization>/pricing.md` | Radius, without sign-in      |
+| A project's own file | `https://<your base URL>/pricing.md`                   | Your Worker, through the SDK |
+
+Both update within a few minutes of a price change or a publish.
+
+## Serve it on your own domain
+
+Agents look for `pricing.md` on the domain they are about to call. With `pricingMd: true`, a Worker running `@radiustech/platform-sdk` serves the project's catalog at `/pricing.md` with only that project in it.
+
+```ts
+// src/index.ts
+import { withRadius } from '@radiustech/platform-sdk';
+export { RadiusCounter } from '@radiustech/platform-sdk/limiters/do';
+
+const handler = {
+  async fetch(request, env, ctx) {
+    return handle(request, env);
+  },
+} satisfies ExportedHandler<Env>;
+
+export default withRadius(handler, { pricingMd: true });
+```
+
+- The file appears once the catalog is published and has a paid endpoint. Until then, `/pricing.md` goes through the policy to your handler.
+- Requests for `/pricing.md` are answered before the policy, so they are never charged or counted.
+- The **Base URL** line is `RADIUS_PUBLIC_URL` when set, otherwise the request's origin.
+- The file is stored in the `RADIUS_POLICY` KV namespace and synced on the same schedule as the policy.
+
+A Worker with its own `scheduled()` handler calls `syncPricingMd()` there:
+
+```ts
+import { syncPolicy, syncPricingMd } from '@radiustech/platform-sdk';
+
+export default {
+  fetch: app.fetch,
+  scheduled: (_controller, env, ctx) => {
+    ctx.waitUntil(syncPolicy(env));
+    ctx.waitUntil(syncPricingMd(env));
+  },
+} satisfies ExportedHandler<Env>;
+```
+
+:::note[Not on Workers?]
+Copy the file from the **pricing.md** menu and host it at `/pricing.md` on your domain. An agent fetches the current file with the `get_pricing_md` tool.
+:::
+
+## Add your own details
+
+The published file lists catalogs and prices only. To add contact details, terms or anything else, copy it from the **pricing.md** menu, extend it, and host it on your own domain.
+
+## Next steps
+
+- [Write the policy](/merchant-console/policy) that sets the prices in the file.
+- [Manage with an agent](/merchant-console/agents) to publish and reprice from a prompt.

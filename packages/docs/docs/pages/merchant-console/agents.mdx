@@ -1,0 +1,116 @@
+---
+title: Manage with an agent
+description: Connect Claude Code, Codex, Cursor or another agent to the Radius platform MCP server to import endpoints, change prices, publish pricing.md and read earnings.
+---
+
+# Manage with an agent [Run your pricing from a prompt]
+
+The Radius platform MCP server gives an agent the same controls as the Merchant Console. The agent signs in as you and acts with your permissions, so it can do what your role allows and nothing more.
+
+## Connect your agent
+
+The server is at `https://platform-api.radiustech.xyz/mcp`. In the Merchant Console, **Connect agent** at the foot of the sidebar shows the snippet for your agent.
+
+| Agent       | Setup                                                                                                                                  |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code | `claude mcp add --transport http radius-platform https://platform-api.radiustech.xyz/mcp`, then run `/mcp` and choose **Authenticate** |
+| Codex       | `codex mcp add radius-platform --url https://platform-api.radiustech.xyz/mcp`, then sign in when Codex asks                            |
+| Cursor      | Add the server to `.cursor/mcp.json`, then sign in from Cursor's MCP settings                                                          |
+| OpenCode    | Add the server to `opencode.json`, then run `opencode mcp auth radius-platform`                                                        |
+
+For Cursor:
+
+```json
+{
+  "mcpServers": {
+    "radius-platform": {
+      "url": "https://platform-api.radiustech.xyz/mcp"
+    }
+  }
+}
+```
+
+Any other MCP client that supports remote servers with OAuth connects with the same URL.
+
+## What to ask
+
+Ask in plain words. The agent picks the tools.
+
+- "Import the OpenAPI spec in this repository into my Reports API project and charge 0.002 USD per call."
+- "Which endpoints earned the most last week?"
+- "Raise the price of the two busiest endpoints by 25%, then publish the catalog."
+- "Is my gate on the current policy version?"
+
+To import from your API's codebase, open the project's **Endpoints** page, select **Import OpenAPI spec**, and copy the prompt on the **Agent** tab. A connected agent can also ask the server for the same instructions as the `import_openapi_spec` prompt.
+
+## Reprice on a schedule
+
+Prices are meant to move. The same request can run on a schedule, so pricing follows demand without anyone watching it:
+
+1. **Read what was paid.** `get_earnings` totals settled payments per endpoint for a time window.
+2. **Compare with the policy.** `get_policy` returns the current rules and prices.
+3. **Reprice what changed** with `update_endpoint`. Each save is a new policy version you can review in the console.
+4. **Enforce without a deploy.** Your gate syncs the new version within a minute. `get_gate_status` confirms it.
+
+:::tip[Start in test mode]
+A project stays in test mode until someone goes live, so you can check an agent's prices on testnet before they take real money.
+:::
+
+## Tools
+
+### Projects
+
+| Tool              | What it does                                               |
+| ----------------- | ---------------------------------------------------------- |
+| `whoami`          | Your user, organization and permissions                    |
+| `list_projects`   | The organization's projects with their endpoint counts     |
+| `get_project`     | One project with its endpoints and a summary of its policy |
+| `create_project`  | Creates a project in test mode with a default policy       |
+| `update_project`  | Renames a project or sets its base URL                     |
+| `archive_project` | Archives a project, so gates refuse its requests           |
+| `restore_project` | Restores an archived project                               |
+
+### Endpoints and policy
+
+| Tool                          | What it does                                                            |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| `propose_endpoints_from_spec` | Proposes endpoints and rules from an OpenAPI 3 document, saving nothing |
+| `create_endpoint`             | Adds one endpoint with its rules                                        |
+| `create_endpoints`            | Adds several endpoints in one policy version                            |
+| `update_endpoint`             | Changes an endpoint's name, methods, path, rules or wallet              |
+| `get_policy`                  | The project's policy as JSON or YAML                                    |
+| `put_policy`                  | Replaces the whole policy                                               |
+| `set_policy_mode`             | Switches a project between test and live                                |
+| `list_payment_options`        | The networks and tokens a policy can accept                             |
+
+### Gate
+
+| Tool                  | What it does                                             |
+| --------------------- | -------------------------------------------------------- |
+| `get_gate_status`     | Whether gates are enforcing the project's current policy |
+| `get_compiled_policy` | The compiled document gates fetch and enforce            |
+
+No tool creates or returns a connector key. Generate it on the project's **Gate** page, so the key never passes through an agent's context. See [set up a gate](/merchant-console/gate).
+
+### pricing.md
+
+| Tool                           | What it does                                           |
+| ------------------------------ | ------------------------------------------------------ |
+| `get_pricing_md`               | The organization's `pricing.md` and where it is served |
+| `publish_pricing_md_catalog`   | Publishes one project's catalog                        |
+| `unpublish_pricing_md_catalog` | Takes one project's catalog out of the file            |
+
+### Wallets and payments
+
+| Tool              | What it does                                                   |
+| ----------------- | -------------------------------------------------------------- |
+| `list_wallets`    | The organization's registered wallets                          |
+| `register_wallet` | Registers an EVM address your organization controls            |
+| `archive_wallet`  | Stops a wallet being chosen for payouts                        |
+| `restore_wallet`  | Makes an archived wallet available again                       |
+| `list_payments`   | Payments, newest first, with endpoint, payer, token and status |
+| `get_earnings`    | Settled payments totalled per network, token and endpoint      |
+
+## Permissions
+
+A tool call fails when your role lacks the permission the same action needs in the console: `endpoints:write` to change rules or publish, `projects:write` to create or rename a project, `wallets:write` to register a wallet. Ask an organization admin to change your role.

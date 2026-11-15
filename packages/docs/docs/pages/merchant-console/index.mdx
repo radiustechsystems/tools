@@ -1,0 +1,105 @@
+---
+title: Merchant Console
+description: Price your API's endpoints, put a gate in front of them, and get paid in stablecoins when agents call. The Radius Merchant Console manages the policy; your gate enforces it on your own domain.
+---
+
+import { MERCHANT_CONSOLE_URL } from '../../constants';
+
+# Merchant Console [Sell your API to agents]
+
+The Radius Merchant Console turns an API or MCP server into priced endpoints that agents pay for per request. You set the prices in a policy, a gate in front of your API enforces it, and payments settle to a wallet you control.
+
+- **Your API stays on your domain.** Agents call your API directly. A gate you run decides each request; Radius only holds the policy.
+- **One policy decides every request.** Each rule allows, denies, rate-limits or charges, and can treat verified agents differently from everyone else.
+- **An agent can run it.** Connect the Radius platform MCP server to Claude Code or another agent, and it imports endpoints, changes prices and reads what you earned.
+
+<div className="mc-cta">
+  <a className="mc-cta__primary" href={MERCHANT_CONSOLE_URL}>
+    Open Merchant Console
+  </a>
+  <a href="#get-access">Get access</a>
+</div>
+
+## How it fits together
+
+1. An agent calls your API at your own domain.
+2. Your gate checks the request against the project's policy and allows, denies, rate-limits or charges it over [x402](/build/x402).
+3. Your API answers the requests the gate lets through.
+4. Payments settle to your wallet, in SBC on Radius or in SBC or USDC on Base.
+
+The gate fetches the policy every minute and keeps a copy, so a request never waits on Radius and a price change needs no deploy.
+
+## Set up a project
+
+A project is one service you sell: its endpoints, its policy and its catalog. Each step below links to its guide.
+
+### 1. Create a project and set its base URL
+
+Select **Create project** and name it. Then open the project's **Settings** and set the **Base URL**: the `https` address agents send requests to, such as `https://api.example.com`. Your `pricing.md` shows it above the project's prices, so agents know where to call.
+
+A new project starts in test mode. Charges take free testnet tokens until you go live.
+
+### 2. Add endpoints
+
+An endpoint is one route of your API, like `/price/*`, with the rules for its requests. On the project's **Endpoints** page, add them one of three ways:
+
+- **Import OpenAPI spec.** Paste or upload an OpenAPI 3.0 or 3.1 document. Each operation becomes an endpoint with a suggested rule, and nothing is saved until you review them.
+- **New endpoint.** Enter a name, a path and its methods by hand.
+- **Agent.** Give the import prompt to a coding agent that has your API's codebase.
+
+On the review screen, turn payment on or off per endpoint, set a default price per call, and select **Create endpoints**. The console saves them as one new version of the policy.
+
+### 3. Choose where payments go
+
+Register a wallet: an EVM address you control. The console asks you to check the whole address, because it can't be changed afterwards. One address receives payments on every network.
+
+Set it as the project's default wallet under **Settings**, in the **Payment** card. See [payments and wallets](/merchant-console/payments).
+
+### 4. Put a gate in front of your API
+
+Open the project's **Gate** page, generate its connector key, and follow the steps for where your API runs: the SDK in a Cloudflare Worker, or `radius-gateway` on your own server or cluster. See [set up a gate](/merchant-console/gate).
+
+### 5. Publish your prices
+
+On the project's **Catalog** page, select **Publish**. Your paid endpoints then appear in your organization's `pricing.md`, the file agents read to find what you sell and what it costs. See [publish pricing.md](/merchant-console/pricing-md).
+
+### 6. Go live
+
+In the project's **Settings**, select **Go live**. The dialog shows what changes: the tokens the project accepts move to their live networks, the wallet stays the same, and agents are charged real money from the next request. See [write the policy](/merchant-console/policy#go-live).
+
+The project overview tracks the same path as a checklist: base URL set, default wallet chosen, at least one charge rule, published in `pricing.md`, gate connected.
+
+## Let an agent do it
+
+Add the Radius platform MCP server to your agent, then ask in plain words. The agent signs in as you and acts with your permissions.
+
+```bash
+claude mcp add --transport http radius-platform https://platform-api.radiustech.xyz/mcp
+```
+
+Prices are meant to move. An agent can read what each endpoint earned with `get_earnings`, compare it with the policy from `get_policy`, and reprice with `update_endpoint`. Each change saves a new policy version that your gate picks up within a minute. See [manage with an agent](/merchant-console/agents).
+
+## Get access
+
+Sign in at app.radiustech.xyz with your work email.
+
+- **Your team is already on Radius.** If your team verified its email domain, you join its organization when you sign in. Otherwise, ask one of its admins to invite you.
+- **Your team is new.** Create an organization. You become its admin and can invite teammates.
+- **Sign-up shows a waitlist.** Radius is inviting early users. Approval sends an invitation email to finish signing up.
+
+<div className="mc-cta">
+  <a className="mc-cta__primary" href={MERCHANT_CONSOLE_URL}>
+    Open Merchant Console
+  </a>
+  <a href="https://www.radiustech.xyz/contact">Contact Radius</a>
+</div>
+
+## In this section
+
+- [Set up a gate](/merchant-console/gate): connect a Worker or `radius-gateway` with the project's connector key.
+- [Write the policy](/merchant-console/policy): rules, limits, agent rules, defaults, and going live.
+- [Publish pricing.md](/merchant-console/pricing-md): the price list agents read, on Radius and on your own domain.
+- [Payments and wallets](/merchant-console/payments): where payments settle and how to see them.
+- [Manage with an agent](/merchant-console/agents): connect an agent and the tools it gets.
+
+To learn how an agent pays for a priced request, see [x402 payments](/build/x402). To charge from your own code without a policy, see [accept payments](/build/accept-payments).

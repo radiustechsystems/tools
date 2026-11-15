@@ -1,0 +1,64 @@
+---
+title: Payments and wallets
+description: Register the wallet a Merchant Console project pays to, and see what agents paid per wallet and per endpoint on Radius and Base.
+---
+
+# Payments and wallets [Where payments settle and how to see them]
+
+Agents pay your endpoints in stablecoins, and each payment settles straight to a wallet you control. Radius never holds your funds.
+
+## Register a wallet
+
+A wallet is an EVM address your organization controls. One address receives payments on every network a project accepts.
+
+1. Open **Wallets** and select **Register wallet**.
+2. Enter the address and a name, such as `Treasury`.
+3. Compare the address with the one in your wallet, tick the confirmation, and register it.
+
+:::warning[The address is fixed once registered]
+You can't change a wallet's address after registering it. If it's wrong, payments go to it until you register a new wallet and pay to that instead.
+:::
+
+Registering a wallet needs the `wallets:write` permission.
+
+## Choose what a project pays to
+
+Each project has a default wallet, set in the **Payment** card of its **Settings**. Charges pay to it unless an endpoint's rule names another wallet.
+
+## See what you were paid
+
+| Where                 | What it shows                                                                            |
+| --------------------- | ---------------------------------------------------------------------------------------- |
+| Organization overview | Live balance across Radius and Base, the latest payment, and payments in the last 7 days |
+| A wallet's page       | Balances per network and the wallet's transfers, with what each paid for                 |
+| An endpoint's page    | The newest payments for that endpoint: time, payer, amount and transaction               |
+
+A wallet's page switches between **Live** and **Test**. Test shows testnet funds, not real money. Each transfer links to its transaction on the network's explorer.
+
+When two projects share an endpoint path, the console uses each project's base URL to tell which project a payment was for. Set a base URL on every project so payments are attributed to the right endpoint.
+
+## Read earnings with an agent
+
+The Merchant Console has no earnings report yet. An agent connected to the Radius platform MCP server reads them with two tools:
+
+- `get_earnings` returns paid requests, paying wallets, the top payers, and settled payments totalled per network, token and endpoint. It takes an optional time window, project and mode.
+- `list_payments` returns your organization's payments, newest first, with each payment's endpoint, payer, token and status.
+
+See [manage with an agent](/merchant-console/agents).
+
+## Networks and tokens
+
+| Mode | Network        | Tokens    |
+| ---- | -------------- | --------- |
+| Live | Radius         | SBC       |
+| Live | Base           | SBC, USDC |
+| Test | Radius testnet | SBC       |
+| Test | Base Sepolia   | SBC, USDC |
+
+SBC and USDC are US dollar stablecoins, so a price of 0.002 USD is paid as 0.002 SBC or 0.002 USDC.
+
+## Archive a wallet
+
+**Archive wallet**, under **Danger zone** on the wallet's page, stops a wallet being chosen for payouts. Its balance, activity and address aren't affected, and you can restore it. A wallet a live project pays to can't be archived until the project pays to another wallet.
+
+Wallets are never deleted: the address and its history are kept.

@@ -1,0 +1,170 @@
+---
+title: Write the policy
+description: How a Merchant Console policy decides each request, with charge, allow and deny rules, free allowances, rate limits, rules for verified agents, defaults, and going live.
+---
+
+# Write the policy [Decide who pays, who passes and who is refused]
+
+A project's policy is the set of rules your gate applies to every request. Each rule allows, denies or charges, and can carry a free allowance or a rate limit. You edit it in the Merchant Console, as YAML, or through an agent; each save is a new version that gates pick up on their next sync.
+
+## How a request is decided
+
+The first rule a request matches decides it. A gate tries rules in this order:
+
+1. **Rules for every request**, in the project's **Settings**.
+2. **The endpoint's own rules**, on the **Endpoints** page.
+3. **The defaults**, when no rule matched.
+
+Within the matched rule, a gate checks in this order:
+
+| Check                                            | Result                                   |
+| ------------------------------------------------ | ---------------------------------------- |
+| The rule has a rate limit and it's spent         | `429` with the code `rate_limited`       |
+| The rule has a free allowance with requests left | Allowed free                             |
+| Otherwise                                        | The rule's action: allow, deny or charge |
+
+A charge answers `402 Payment Required` with the price. The agent pays in stablecoins and retries, as [x402](/build/x402) describes.
+
+## Endpoints and paths
+
+An endpoint is a route: a path pattern and the methods it matches.
+
+- `:name` matches exactly one segment: `/tx/:hash`.
+- A trailing `*` matches the path and everything below it: `/price/*`.
+- Where routes overlap, the most specific decides: `/tx/latest` beats `/tx/:hash`, which beats `/tx/*`. Only that endpoint's rules are tried.
+
+The console warns when one endpoint's rules stop applying to a path because a more specific endpoint covers it.
+
+## Rules
+
+Add a rule from a preset, then adjust it.
+
+| Preset                | What it does                                           |
+| --------------------- | ------------------------------------------------------ |
+| Charge per call       | Charges every request the price you set                |
+| Charge after 100 free | Allows a free allowance per window, then charges       |
+| Allow, rate limited   | Serves requests free up to a limit, then answers `429` |
+| Allow                 | Serves requests free                                   |
+| Deny                  | Refuses requests with the status and code you set      |
+
+A charge rule has a price in USD, a description agents see, and the wallet it pays. It pays the project's default wallet unless you choose another.
+
+### Limits
+
+A free allowance and a rate limit each count requests per window, such as `1h` or `1m`. Choose what they count by:
+
+| Counted by            | Counts requests per                                     |
+| --------------------- | ------------------------------------------------------- |
+| IP address            | Client IP address                                       |
+| Caller                | The request's credential                                |
+| All requests combined | Everyone together                                       |
+| Verified agent        | Verified agent, whatever address its requests come from |
+
+Behind a proxy, set the project's client IP to the header your proxy sets, under **Defaults**. Otherwise every request counts against the proxy's address.
+
+## Rules for verified agents
+
+A rule can apply only to bots and agents your gate can verify. Under **Which requests**, select **Only verified agents**, then pick categories, signers or both.
+
+- **Category.** Cloudflare's verified bot categories, such as search engine crawlers, link previews, AI assistants, AI search and AI training crawlers.
+- **Signed by.** Agents that sign each request with Web Bot Auth keys from a site you name, such as `https://chatgpt.com`.
+
+A gate checks every agent. A request it can't verify matches no agent rule and falls through to the next rule, so a client can't claim a category by setting its user agent.
+
+With both categories and signers on one rule, a request must match one of each. To let either through, use two rules.
+
+This policy lets search engines and link previews in free, gives signed agents a daily allowance counted per agent, and charges everyone else:
+
+```yaml
+schema: radius.policy/0.2
+rules:
+  - id: verified-bots
+    match:
+      agent:
+        category:
+          - search_engine_crawler
+          - page_preview
+    action:
+      type: allow
+endpoints:
+  get-reports-all:
+    rules:
+      - id: signed-agents
+        match:
+          agent:
+            signature_agent:
+              - https://chatgpt.com
+        free_quota:
+          key: agent
+          quota: 100
+          window: 1d
+        action:
+          type: charge
+          price: '0.002'
+          description: Report, per call
+      - id: charge
+        action:
+          type: charge
+          price: '0.002'
+          description: Report, per call
+```
+
+:::note[Agent rules need a recent gate]
+Agent rules save the policy as `radius.policy/0.2`. A Worker reads them from `@radiustech/platform-sdk` 0.2.0 or later. Count their limits by verified agent: one operator's agents share IP addresses, so a per-IP allowance is spent by all of them at once.
+:::
+
+## Accepted tokens
+
+The **Payment** card in the project's **Settings** lists the networks and tokens the project accepts, and its default wallet.
+
+| Mode | Network        | Tokens    |
+| ---- | -------------- | --------- |
+| Live | Radius         | SBC       |
+| Live | Base           | SBC, USDC |
+| Test | Radius testnet | SBC       |
+| Test | Base Sepolia   | SBC, USDC |
+
+Every available token is accepted unless you remove it. A project keeps at least one.
+
+## Defaults
+
+Defaults apply when no rule decides, and when a gate is on its own.
+
+| Setting                              | Options                             | What it does                                                                                                                |
+| ------------------------------------ | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Requests no rule matches             | Allow (default), Deny               | Allow serves them free. Deny refuses them with `403`                                                                        |
+| Before a gate has fetched any policy | Allow (default), Deny               | Allow serves every request free until a policy loads. Deny answers `503`                                                    |
+| When a gate can't count requests     | Within the limit (default), over it | Within skips rate limits and serves free-allowance routes free. Over answers `429` on rate limits and charges every request |
+| Client IP address                    | The connection (default), a header  | Where a gate reads the caller's address                                                                                     |
+| Response headers                     | `RateLimit`, `Retry-After`          | Which headers limited responses carry                                                                                       |
+
+:::warning[A live project can fail open]
+With the defaults, paid routes are free while a gate can't load a policy. On a live project, choose **Deny** for **Before a gate has fetched any policy** and pass `noPolicy: 'deny'` to the SDK. The SDK reads that setting from its own options, not from the policy.
+:::
+
+## Go live
+
+A project is in test or live mode. Test takes free testnet tokens, so nobody pays real money. Live takes real stablecoins.
+
+In the project's **Settings**, select **Go live**. The dialog shows what changes before you confirm:
+
+- **Accepts.** Each accepted token moves to its live network. A token that isn't available live takes the live default.
+- **Pays to.** The same wallet: one address works on every network.
+- **pricing.md.** A published catalog is listed with live prices.
+- **Agents.** They are charged from the next request.
+
+Gates pick up the switch on their next policy sync. **Switch to test** reverses it and stops live payments.
+
+## Edit the policy as YAML
+
+In the project's **Settings**, the **Policy** menu has **View YAML** and **Import YAML**. Importing replaces the whole policy, every endpoint's rules included. A rule that keeps its ID keeps its history.
+
+An agent reads the same document with `get_policy` and replaces it with `put_policy`; see [manage with an agent](/merchant-console/agents).
+
+## Permissions
+
+Reading the policy needs the `endpoints:read` permission. Changing rules, importing endpoints, switching mode and publishing need `endpoints:write`. Without it, the console shows the policy read-only and names the permission to ask an organization admin for.
+
+## Archive a project
+
+**Archive project**, under **Danger zone** in the project's **Settings**, takes a project out of service without deleting it. Gates refuse agents' requests from their next sync, the catalog leaves `pricing.md`, and the endpoints, rules and policy are kept. **Restore project** brings it back as it was.
