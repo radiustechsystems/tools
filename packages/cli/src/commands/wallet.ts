@@ -154,7 +154,8 @@ export function registerWallet(program: Command): void {
   wallet
     .command('export')
     .description('Decrypt and print the private key (DESTRUCTIVE: prints secret material)')
-    .action(async (_subOpts, cmd) => {
+    .option('-y, --yes', 'skip the confirmation prompt, for agents and scripts')
+    .action(async (subOpts: { yes?: boolean }, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       const cfg = resolveConfig(opts);
       if (!opts.privateKey && !keystoreExists(cfg.keystorePath)) {
@@ -162,11 +163,7 @@ export function registerWallet(program: Command): void {
           `No keystore at ${cfg.keystorePath}. Run \`radius-cli wallet new\` or pass --private-key.`,
         );
       }
-      const ok = await confirm({
-        message: 'Print the raw private key to stdout?',
-        default: false,
-      });
-      if (!ok) return;
+      if (!subOpts.yes && !(await confirmExport())) return;
 
       let pk: Hex;
       if (opts.privateKey) {
@@ -382,6 +379,21 @@ export function registerWallet(program: Command): void {
   registerWalletPay(wallet);
 }
 
+/**
+ * Ask before printing the key. Without a terminal, stdin at EOF closes the prompt: say how to skip it
+ * instead of inquirer's "User force closed the prompt". stdin that stays open with no input still waits.
+ */
+async function confirmExport(): Promise<boolean> {
+  try {
+    return await confirm({ message: 'Print the raw private key to stdout?', default: false });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'ExitPromptError') {
+      throw new Error('wallet export: the confirmation prompt was closed before an answer. Pass --yes to print the key without asking.');
+    }
+    throw err;
+  }
+}
+
 function parseGasLimit(input: string | undefined): bigint | undefined {
   if (input === undefined) return undefined;
   let value: bigint;
@@ -418,7 +430,7 @@ async function sendNative(
     type: 'legacy',
     chain: cfg.chain,
   });
-  await reportTx(publicClient, hash, opts, wait);
+  await reportTx(cfg, publicClient, hash, opts, wait);
 }
 
 /**
@@ -440,7 +452,7 @@ async function sendErc20(
   const publicClient = makePublicClient(cfg);
   const walletClient = makeWalletClient(cfg, account);
   const { hash } = await walletClient.transfer({ token, to: to as Address, amount: parseAmountArg(amount), gas, wait: false });
-  await reportTx(publicClient, hash, opts, wait);
+  await reportTx(cfg, publicClient, hash, opts, wait);
 }
 
 async function sendCastForm(
@@ -478,27 +490,38 @@ async function sendCastForm(
     type: 'legacy',
     chain: cfg.chain,
   });
-  await reportTx(publicClient, hash, opts, wait);
+  await reportTx(cfg, publicClient, hash, opts, wait);
 }
 
+/**
+ * Print a sent transaction. With `--no-wait` the text output stays the bare hash on stdout, so
+ * `hash=$(radius-cli wallet send … --no-wait)` keeps working; the explorer link goes to stderr.
+ */
 async function reportTx(
+  cfg: ReturnType<typeof resolveConfig>,
   publicClient: ReturnType<typeof makePublicClient>,
   hash: `0x${string}`,
   opts: GlobalOptions,
   wait: boolean,
 ): Promise<void> {
+  const explorerUrl = explorerTxUrl(radiusNetwork(cfg), hash);
   if (!wait) {
-    if (opts.json) console.log(jsonStringify({ hash }));
-    else console.log(hash);
+    if (opts.json) {
+      console.log(jsonStringify({ hash, explorerUrl }));
+    } else {
+      console.log(hash);
+      if (explorerUrl) console.error(explorerUrl);
+    }
     return;
   }
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   if (opts.json) {
-    console.log(jsonStringify({ hash, receipt }));
+    console.log(jsonStringify({ hash, receipt, explorerUrl }));
   } else {
     console.log(`Hash:        ${hash}`);
     console.log(`Status:      ${receipt.status}`);
     console.log(`Block:       ${receipt.blockNumber.toString()}`);
     console.log(`Gas used:    ${receipt.gasUsed.toString()}`);
+    if (explorerUrl) console.log(`Explorer:    ${explorerUrl}`);
   }
 }
