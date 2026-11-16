@@ -24,6 +24,8 @@ import {
 import { createRadiusFetch, getPaymentReceipt, RadiusPaymentError, type PaymentOffer, type PaymentProtocol, type PaymentReceipt } from 'radius-sdk/client';
 import { RadiusFacilitatorClient } from 'radius-sdk/server';
 import { decidePayment } from './payPolicy.js';
+import { lintOpenApi, type OpenApiCache, type OpenApiSource } from './sellCheckDiscovery.js';
+import { scoreChecks } from './sellCheckScore.js';
 
 export type CheckStatus = 'pass' | 'warn' | 'fail' | 'skip' | 'info';
 
@@ -32,6 +34,10 @@ export interface Check {
   id: string;
   status: CheckStatus;
   message: string;
+  /** Overrides whether a failure of this check is blocking for the score (see sellCheckScore). */
+  blocking?: boolean;
+  /** Points this check cost the score, when it cost any. */
+  deduction?: number;
 }
 
 export interface OfferSummary {
@@ -60,9 +66,30 @@ export interface SellCheckReport {
   /** Facilitators whose `/supported` was read, by URL. */
   facilitators: Record<string, { ok: boolean; kinds?: string[]; extensions?: string[]; error?: string }>;
   payment?: { paid: boolean; status: number; protocol?: string; network?: string; amount?: string; payTo?: string; txHash?: string; payer?: string };
+  /** Present when unpaid requests were served free under a rate-limit (free quota) before any 402. */
+  freeQuota?: FreeQuota;
   checks: Check[];
   summary: Record<CheckStatus, number>;
+  /** 0 to 100, from the checks (see sellCheckScore for the rubric). */
+  score: number;
 }
+
+/** What the RateLimit headers of the free (2xx) unpaid answers said, and how many there were. */
+export interface FreeQuota {
+  /** `RateLimit-Limit`: requests per window. */
+  limit?: number;
+  /** `RateLimit-Remaining` on the last free answer. */
+  remaining?: number;
+  /** `RateLimit-Reset` on the last free answer, in seconds. */
+  resetSeconds?: number;
+  /** Unpaid requests answered 2xx before the 402 (or before giving up). */
+  served: number;
+  /** True when a later unpaid request answered 402. */
+  exhausted: boolean;
+}
+
+/** Default for `freeRequests`: the most extra unpaid requests spent working through a free quota. */
+export const DEFAULT_FREE_REQUESTS = 25;
 
 export interface SellCheckOptions {
   url: string;
@@ -80,6 +107,24 @@ export interface SellCheckOptions {
   radiusAssetAddress?: `0x${string}`;
   /** Also send an unpaid HEAD and warn when it is served. */
   probeHead?: boolean;
+  /**
+   * When the unpaid request is served (2xx) with RateLimit headers that show a free quota, send up
+   * to this many more unpaid requests to use it up and reach the 402 (default 25). Sent only when
+   * `RateLimit-Remaining` fits: remaining + 1 requests. 0 reports the quota without spending it.
+   */
+  freeRequests?: number;
+  /**
+   * Also send the request with a malformed payment credential (one per protocol the 402 offers) and
+   * check the seller answers 402, not 5xx or 2xx (default true). Never pays.
+   */
+  probeMalformed?: boolean;
+  /**
+   * Where to read the seller's OpenAPI document for the discovery lint: a URL, or a parsed document
+   * with its source. Default: `/openapi.json` on the URL's origin. `false` skips the lint.
+   */
+  openapi?: string | OpenApiSource | false;
+  /** Shares OpenAPI fetches between runs (sell check --pricing checks many routes of one origin). */
+  openapiCache?: OpenApiCache;
   /** Make one paid request. */
   pay?: {
     networks: PaymentNetwork[];
@@ -171,6 +216,28 @@ function expectedAmount(price: string, asset: { address: `0x${string}`; decimals
   }
 }
 
+const INTEGER = /^\s*(\d+)\s*$/;
+
+/**
+ * The `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` headers (IETF httpapi
+ * ratelimit-headers, as separate fields), or their common `X-RateLimit-*` forms; undefined when
+ * there is no `Remaining`, which is what tells a free quota from a route that is simply free.
+ */
+export function readRateLimit(headers: Headers): { limit?: number; remaining: number; resetSeconds?: number } | undefined {
+  const num = (name: string) => {
+    const m = INTEGER.exec(headers.get(`ratelimit-${name}`) ?? headers.get(`x-ratelimit-${name}`) ?? '');
+    return m ? Number(m[1]) : undefined;
+  };
+  const remaining = num('remaining');
+  if (remaining === undefined) return undefined;
+  return { limit: num('limit'), remaining, resetSeconds: num('reset') };
+}
+
+function quotaText(q: { limit?: number; remaining?: number; resetSeconds?: number }): string {
+  const parts = [q.limit !== undefined ? `limit ${q.limit}` : undefined, q.remaining !== undefined ? `${q.remaining} remaining` : undefined, q.resetSeconds !== undefined ? `resets in ${q.resetSeconds} s` : undefined];
+  return parts.filter(Boolean).join(', ');
+}
+
 function withTimeout(fetchFn: typeof globalThis.fetch, ms: number): typeof globalThis.fetch {
   return (input, init) => fetchFn(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(ms) });
 }
@@ -180,11 +247,12 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
   const timeoutMs = options.timeoutMs ?? 15_000;
   const baseFetch = withTimeout(options.fetch ?? globalThis.fetch, timeoutMs);
   const checks: Check[] = [];
-  const add = (id: string, status: CheckStatus, message: string) => checks.push({ id, status, message });
-  const report: SellCheckReport = { url: options.url, method, ok: false, status: null, offers: [], mpp: [], facilitators: {}, checks, summary: { pass: 0, warn: 0, fail: 0, skip: 0, info: 0 } };
+  const add = (id: string, status: CheckStatus, message: string, blocking?: boolean) => checks.push(blocking === undefined ? { id, status, message } : { id, status, message, blocking });
+  const report: SellCheckReport = { url: options.url, method, ok: false, status: null, offers: [], mpp: [], facilitators: {}, checks, summary: { pass: 0, warn: 0, fail: 0, skip: 0, info: 0 }, score: 0 };
   const finish = (): SellCheckReport => {
     for (const c of checks) report.summary[c.status]++;
     report.ok = report.summary.fail === 0;
+    report.score = scoreChecks(checks, report.status === 402);
     return report;
   };
 
@@ -201,18 +269,61 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
     add('status', 'fail', `request failed: ${(e as Error).message}`);
     return finish();
   }
+  // 1a. A free quota: the route is paid, but the first unpaid requests in each window are served.
+  // The RateLimit headers say so; use the quota up (bounded) to reach the 402, or report it.
+  const isServed = (r: Response) => r.status >= 200 && r.status < 300;
+  let quota = isServed(first) ? readRateLimit(first.headers) : undefined;
+  if (quota) {
+    const budget = options.freeRequests ?? DEFAULT_FREE_REQUESTS;
+    const free: FreeQuota = { ...quota, served: 1, exhausted: false };
+    report.freeQuota = free;
+    const seen = () => `unpaid ${method} answered ${first.status} with RateLimit headers (${quotaText(free)}): a free quota`;
+    if (budget === 0) {
+      add('free-quota', 'info', `${seen()}, not used up (--free-requests 0), so the 402 was not checked`);
+      report.status = first.status;
+      return finish();
+    }
+    if (quota.remaining + 1 > budget) {
+      add('free-quota', 'warn', `${seen()}; reaching the 402 takes ${quota.remaining + 1} more unpaid requests, more than --free-requests ${budget}, so the 402 was not checked (raise --free-requests, or wait for the reset)`);
+      report.status = first.status;
+      return finish();
+    }
+    for (let sent = 0; sent < budget && quota && isServed(first); sent++) {
+      await first.arrayBuffer().catch(() => undefined);
+      try {
+        first = await baseFetch(request());
+      } catch (e) {
+        add('status', 'fail', `request ${free.served + 1} failed: ${(e as Error).message}`);
+        return finish();
+      }
+      quota = isServed(first) ? readRateLimit(first.headers) : undefined;
+      if (isServed(first)) {
+        free.served++;
+        if (quota) Object.assign(free, quota);
+      }
+    }
+    free.exhausted = first.status === 402;
+    if (free.exhausted) add('free-quota', 'info', `free quota: ${free.served} unpaid ${method} request${free.served === 1 ? ' was' : 's were'} served (${quotaText(free)}), then 402`);
+    else if (isServed(first)) {
+      add('free-quota', 'warn', `${seen()}; still served after ${free.served} unpaid requests (--free-requests ${budget}), so the 402 was not checked`);
+      report.status = first.status;
+      return finish();
+    }
+  }
   const firstBody = new Uint8Array(await first.arrayBuffer());
   report.status = first.status;
   if (first.status !== 402) {
-    const why = first.status >= 200 && first.status < 300
-      ? 'the route is served without payment (is it listed in routes, with the same method and path?)'
+    const why = isServed(first)
+      ? "the route is served without payment and without RateLimit headers, so it is not a free quota: check that the seller's paid routes include it, with the same method and path"
       : first.status >= 300 && first.status < 400
         ? `redirected to ${first.headers.get('location') ?? '(no Location)'}; check the final URL`
-        : 'expected 402 Payment Required';
+        : first.status === 429
+          ? `rate limited${first.headers.get('retry-after') ? ` (Retry-After ${first.headers.get('retry-after')})` : ''}; wait and run it again`
+          : 'expected 402 Payment Required';
     add('status', 'fail', `unpaid ${method} answered ${first.status}: ${why}`);
     return finish();
   }
-  add('status', 'pass', `unpaid ${method} answers 402`);
+  add('status', 'pass', `unpaid ${method} answers 402${report.freeQuota ? ` once the free quota is used up` : ''}`);
   const cacheControl = first.headers.get('cache-control') ?? '';
   if (/no-store/i.test(cacheControl)) add('cache', 'pass', 'the 402 is marked Cache-Control: no-store');
   else add('cache', 'warn', `the 402 has Cache-Control "${cacheControl}"; a shared cache could serve a stale challenge`);
@@ -406,10 +517,10 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
     }
   }
 
-  // 6. MPP challenges (radiusPayments() and radius-sdk/hono with `mpp: { secretKey }`).
+  // 6. MPP challenges (`WWW-Authenticate: Payment`), whoever serves them.
   const mppChallenges: MppChallenge[] = parseMppChallenges(first.headers.get('www-authenticate'));
   if (mppChallenges.length === 0) {
-    add('mpp', 'info', 'no MPP challenge (WWW-Authenticate: Payment); add mpp: { secretKey } to radiusPayments() or radius-sdk/hono to accept MPP (the upstream x402 adapters serve x402 only)');
+    add('mpp', 'info', 'no MPP challenge (WWW-Authenticate: Payment): buyers can pay over x402 only. MPP is optional and enabled in the seller\'s payment setup (with radius-sdk: mpp: { secretKey } in radiusPayments() or radius-sdk/hono)');
   } else {
     add('mpp', 'pass', `${mppChallenges.length} MPP challenge${mppChallenges.length === 1 ? '' : 's'}`);
   }
@@ -474,7 +585,37 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
     else add(`buyer.${protocol}`, 'fail', `a radius-sdk buyer refuses it: ${selected.code}: ${selected.message}`);
   }
 
-  // 8. HEAD: a router answers HEAD with the GET handler; servers that match route verbs exactly (@x402/core
+  // 8. A malformed credential must get a 402 (a fresh challenge), not a crash and not the resource.
+  if (options.probeMalformed !== false) {
+    const probes: { protocol: string; header: string; value: string }[] = [];
+    if (pr) {
+      probes.push(pr.x402Version === 1
+        ? { protocol: 'x402', header: 'X-PAYMENT', value: MALFORMED_CREDENTIAL }
+        : { protocol: 'x402', header: 'PAYMENT-SIGNATURE', value: MALFORMED_CREDENTIAL });
+    }
+    if (mppChallenges.length > 0) probes.push({ protocol: 'mpp', header: 'Authorization', value: `Payment ${MALFORMED_CREDENTIAL}` });
+    for (const probe of probes) {
+      const r = request();
+      r.headers.set(probe.header, probe.value);
+      const sent = `an unpaid ${method} with a malformed ${probe.header}${probe.protocol === 'mpp' ? ': Payment' : ''} credential`;
+      let res: Response;
+      try {
+        res = await baseFetch(r);
+      } catch (e) {
+        add(`credentials.${probe.protocol}`, 'warn', `${sent} failed: ${(e as Error).message}`);
+        continue;
+      }
+      await res.arrayBuffer().catch(() => undefined);
+      const id = `credentials.${probe.protocol}`;
+      const fresh = probe.protocol === 'x402' ? res.headers.has('payment-required') : parseMppChallenges(res.headers.get('www-authenticate')).length > 0;
+      if (res.status === 402) add(id, 'pass', `${sent} answers 402${fresh ? ' with a fresh challenge' : ''}`);
+      else if (res.status >= 200 && res.status < 300) add(id, 'fail', `${sent} answered ${res.status}: the route is served without a valid payment; verify every credential before running the handler`, true);
+      else if (res.status >= 500) add(id, 'fail', `${sent} answered ${res.status}: a bad credential crashes the seller; answer 402 with a fresh challenge so the buyer can pay again (radius-sdk sellers do)`);
+      else add(id, 'warn', `${sent} answered ${res.status}: buyers expect 402 with a fresh challenge, so they can sign again (radius-sdk sellers answer 402)`);
+    }
+  }
+
+  // 9. HEAD: a router answers HEAD with the GET handler; servers that match route verbs exactly (@x402/core
   // before 2.29, other x402 servers) run it unpaid.
   if (options.probeHead) {
     try {
@@ -486,7 +627,20 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
     }
   }
 
-  // 9. One real payment.
+  // 10. Discovery: the seller's OpenAPI document lists this priced route with its payment info.
+  if (options.openapi !== false) {
+    for (const c of await lintOpenApi({
+      url: options.url,
+      method,
+      source: options.openapi,
+      x402Offers: x402Offers.map((o) => ({ network: presetFor(o.network), asset: String(o.asset), amount: pr?.x402Version === 1 ? (o as unknown as { maxAmountRequired?: unknown }).maxAmountRequired : o.amount })),
+      hasMpp: mppChallenges.length > 0,
+      fetch: baseFetch,
+      cache: options.openapiCache,
+    })) add(c.id, c.status, c.message);
+  }
+
+  // 11. One real payment.
   if (options.pay) {
     if (checks.some((c) => c.status === 'fail')) add('pay', 'skip', 'not paying: fix the failed checks first');
     else await payOnce(options, method, add, report, timeoutMs);
@@ -494,6 +648,9 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
 
   return finish();
 }
+
+/** Sent as the payment credential by the malformed-credential check: not base64 JSON, so nothing can verify it. */
+export const MALFORMED_CREDENTIAL = 'radius-cli-sell-check.malformed-credential';
 
 /** What radius-sdk's buyer selects from the 402 (declining before it signs anything), or its refusal. */
 async function sdkSelects(

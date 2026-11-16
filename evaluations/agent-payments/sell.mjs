@@ -269,9 +269,13 @@ function submit(url, header, init = {}) {
   return fetch(url, { ...init, headers: { ...init.headers, [name]: header } });
 }
 
-/** The inherited environment minus `RADIUS_*`, so a developer's wallet settings cannot leak into the CLI under test. */
+/**
+ * The inherited environment minus `RADIUS_*`, so a developer's wallet settings cannot leak into the CLI under test,
+ * and minus the CI markers, so `sell check` neither refuses `--pay` nor writes to this job's GitHub Actions summary.
+ */
 function withoutRadiusEnv() {
-  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('RADIUS_')));
+  const ci = new Set(['CI', 'GITHUB_ACTIONS', 'GITHUB_STEP_SUMMARY']);
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('RADIUS_') && !ci.has(key)));
 }
 
 function runCli(args, env) {
