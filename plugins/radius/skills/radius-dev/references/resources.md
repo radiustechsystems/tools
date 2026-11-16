@@ -92,15 +92,15 @@
 ## x402 Protocol
 
 - [x402.org](https://www.x402.org/) — Protocol specification and overview
-- [x402 exact EVM spec (Permit2)](https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md) — Canonical `x402ExactPermit2Proxy` contract address and settlement scheme
+- [x402 exact EVM spec (EIP-3009 and Permit2)](https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md) — Canonical `x402ExactPermit2Proxy` contract address and settlement scheme
 - [Radius x402 Integration (live docs)](https://docs.radiustech.xyz/developer-resources/x402-integration.md) — Radius-native x402 integration guide (always current)
 - [Stablecoin.xyz x402 overview](https://docs.stablecoin.xyz/x402/overview) — Hosted facilitator tooling for Radius
 - [Stablecoin.xyz x402 client docs](https://docs.stablecoin.xyz/x402/sdk) — Client documentation
 - [Stablecoin.xyz x402 facilitator](https://docs.stablecoin.xyz/x402/facilitator) — Facilitator documentation
 
 ### Endorsed facilitators
-- **Radius (mainnet):** `https://facilitator.radiustech.xyz` (`eip155:723487`; `permit2`, `eip2612GasSponsoring`) — **recommended**
-- **Radius (testnet):** `https://facilitator.testnet.radiustech.xyz` (`eip155:72344`; `permit2`, `eip2612GasSponsoring`) — **recommended**
+- **Radius (mainnet):** `https://facilitator.radiustech.xyz` (`eip155:723487`; `eip3009`, `permit2`, `eip2612GasSponsoring`) — **recommended**
+- **Radius (testnet):** `https://facilitator.testnet.radiustech.xyz` (`eip155:72344`; `eip3009`, `permit2`, `eip2612GasSponsoring`) — **recommended**
 - Stablecoin.xyz: `https://x402.stablecoin.xyz` (mainnet + testnet, v1 + v2)
 - FareSide: `https://facilitator.x402.rs` (testnet only, v2)
 - Middlebit: `https://middlebit.com` (mainnet, routes via stablecoin.xyz)

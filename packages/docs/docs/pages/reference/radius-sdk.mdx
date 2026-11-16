@@ -3,7 +3,7 @@ title: radius-sdk reference
 description: Reference for radius-sdk, the TypeScript SDK for x402 and MPP payments on Radius and other EVM networks — entry points, radiusPayments and createRadiusFetch options, networks, wallet helpers, balances, errors, and configuration.
 ---
 
-import { TESTNET_CHAIN_ID, MAINNET_CHAIN_ID, STABLECOIN, NATIVE_TOKEN } from '../../constants';
+import { STABLECOIN, NATIVE_TOKEN } from '../../constants';
 
 # radius-sdk reference [TypeScript SDK for x402 payments on Radius]
 
@@ -178,19 +178,19 @@ import { createRadiusFetch } from 'radius-sdk/client';
 const payFetch = createRadiusFetch({ network: 'testnet', signer: process.env.RADIUS_PRIVATE_KEY as `0x${string}`, maxPerRequest: '0.01 SBC' });
 ```
 
-| Option               | Type                                         | Default            | Description                                                                                                                                                                  |
-| -------------------- | -------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `signer`             | private key, viem account, or `WalletClient` | Required           | Signs payments; sending transactions needs a key, a local account, or a `WalletClient`                                                                                       |
-| `maxPerRequest`      | `Price`                                      | Required           | Ceiling for each payment; not a cumulative budget                                                                                                                            |
-| `network`            | A preset ID or a `PaymentNetwork`            | `'mainnet'`        | Payments are made only on this network                                                                                                                                       |
-| `networks`           | Array of networks                            | —                  | Instead of `network`: pay on any of these, preferring them in order                                                                                                          |
-| `protocols`          | Array of `'x402'` and `'mpp'`                | `['x402', 'mpp']`  | Protocols to pay with, in preference order                                                                                                                                   |
-| `preferFunded`       | `boolean`                                    | `true`             | With several candidate networks, pay on one whose balance covers the price                                                                                                   |
-| `onPaymentRequired`  | `(offer) => boolean \| Promise<boolean>`     | —                  | Approve or decline an [offer](#offers) before signing                                                                                                                        |
-| `permit2Approval`    | `'auto'` or `'never'`                        | `'auto'`           | Without gas sponsoring, `'auto'` sends one unlimited Permit2 approval; `'never'` throws `approval_required`, also for a sponsored raw approve (`erc20ApprovalGasSponsoring`) |
-| `onApprovalRequired` | `(request) => boolean \| Promise<boolean>`   | —                  | Approve or decline any allowance change this client makes; see [approval requests](#approval-requests)                                                                       |
-| `onPaid`             | `(receipt, offer) => void`                   | —                  | Called after each paid response                                                                                                                                              |
-| `fetch`              | `typeof fetch`                               | `globalThis.fetch` | Underlying fetch                                                                                                                                                             |
+| Option               | Type                                         | Default            | Description                                                                                                                                                                                     |
+| -------------------- | -------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `signer`             | private key, viem account, or `WalletClient` | Required           | Signs payments; sending transactions needs a key, a local account, or a `WalletClient`                                                                                                          |
+| `maxPerRequest`      | `Price`                                      | Required           | Ceiling for each payment; not a cumulative budget                                                                                                                                               |
+| `network`            | A preset ID or a `PaymentNetwork`            | `'mainnet'`        | Payments are made only on this network                                                                                                                                                          |
+| `networks`           | Array of networks                            | —                  | Instead of `network`: pay on any of these, preferring them in order                                                                                                                             |
+| `protocols`          | Array of `'x402'` and `'mpp'`                | `['x402', 'mpp']`  | Protocols to pay with, in preference order                                                                                                                                                      |
+| `preferFunded`       | `boolean`                                    | `true`             | With several candidate networks, pay on one whose balance covers the price                                                                                                                      |
+| `onPaymentRequired`  | `(offer) => boolean \| Promise<boolean>`     | —                  | Approve or decline an [offer](#offers) before signing                                                                                                                                           |
+| `permit2Approval`    | `'auto'` or `'never'`                        | `'auto'`           | For Permit2 offers without gas sponsoring, `'auto'` sends one unlimited Permit2 approval; `'never'` throws `approval_required`, also for a sponsored raw approve (`erc20ApprovalGasSponsoring`) |
+| `onApprovalRequired` | `(request) => boolean \| Promise<boolean>`   | —                  | Approve or decline any allowance change this client makes; see [approval requests](#approval-requests)                                                                                          |
+| `onPaid`             | `(receipt, offer) => void`                   | —                  | Called after each paid response                                                                                                                                                                 |
+| `fetch`              | `typeof fetch`                               | `globalThis.fetch` | Underlying fetch                                                                                                                                                                                |
 
 It also accepts the [network overrides](#networks); with `networks`, they apply to the first network.
 
@@ -224,7 +224,7 @@ Payment rules:
 
 ### Approval requests
 
-`onApprovalRequired` receives an `ApprovalRequest` for every allowance change: the Permit2 approval a payment needs, `approvePermit2()`, and `approve()`. Return `false` to decline; the call throws `declined` with the request as `details`.
+`onApprovalRequired` receives an `ApprovalRequest` for every allowance change: the Permit2 approval a Permit2 payment needs (an EIP-3009 payment needs none), `approvePermit2()`, and `approve()`. Return `false` to decline; the call throws `declined` with the request as `details`.
 
 | Field              | Description                                                                                                                             |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
@@ -421,12 +421,16 @@ Payment failures throw `RadiusPaymentError` with a `code` and, for some codes, `
 
 ## Networks
 
-| Network                          | Chain ID           | Asset        | Default facilitator | Export          |
-| -------------------------------- | ------------------ | ------------ | ------------------- | --------------- |
-| `'mainnet'` / `'radius'`         | {MAINNET_CHAIN_ID} | {STABLECOIN} | Radius              | `radiusMainnet` |
-| `'testnet'` / `'radius-testnet'` | {TESTNET_CHAIN_ID} | {STABLECOIN} | Radius              | `radiusTestnet` |
-| `'base'`                         | 8453               | USDC         | None: name one      | `baseMainnet`   |
-| `'base-sepolia'`                 | 84532              | USDC         | x402.org            | `baseSepolia`   |
+{/* networks:start */}
+
+| Network                            | Chain ID | Asset | Default facilitator                | Export          |
+| ---------------------------------- | -------- | ----- | ---------------------------------- | --------------- |
+| `'mainnet'` / `'radius'` (default) | 723487   | SBC   | facilitator.radiustech.xyz         | `radiusMainnet` |
+| `'testnet'` / `'radius-testnet'`   | 72344    | SBC   | facilitator.testnet.radiustech.xyz | `radiusTestnet` |
+| `'base'`                           | 8453     | USDC  | facilitator.radiustech.xyz         | `baseMainnet`   |
+| `'base-sepolia'`                   | 84532    | USDC  | facilitator.testnet.radiustech.xyz | `baseSepolia`   |
+
+{/* networks:end */}
 
 A `PaymentNetwork` carries a viem `Chain` (`radiusTestnet.chain`) plus its payment `asset`, default `facilitatorUrl`, `faucetUrl` (Radius only), and the names x402 v1 challenges use for it. `definePaymentNetwork({ chain, asset, facilitatorUrl })` builds one for any other EVM network; `asset` gives the token's address, symbol, decimals, and EIP-712 domain `name` and `version`.
 
@@ -443,11 +447,11 @@ Prices in display units assume a USD stablecoin, which every preset uses.
 
 ### Several networks
 
-`networks` makes a seller offer one payment option per network on every route, in that order. Each network is settled by its own facilitator. Base mainnet has no default facilitator, so name one:
+`networks` makes a seller offer one payment option per network on every route, in that order. Each network is settled by its own facilitator: the Radius facilitator by default, on Base as well as on Radius. Name a facilitator per network to settle elsewhere:
 
 ```typescript
 const pay = radiusPayments({
-  networks: ['mainnet', { network: 'base', facilitator: { url: 'https://your-base-facilitator.example' } }],
+  networks: ['mainnet', 'base'], // or { network: 'base', facilitator: { url: 'https://your-base-facilitator.example' } }
   payTo: '0xYourWalletAddress',
   routes: { 'GET /api/lookup': '0.001' },
 });
