@@ -5,7 +5,7 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ['node_modules/', 'dist/', '.wrangler/', '.vocs/', 'tmp/'],
+    ignores: ['node_modules/', 'dist/', '.wrangler/', '.vocs/', 'tmp/', 'public/.well-known/'],
   },
   {
     files: ['**/*.ts', '**/*.tsx'],

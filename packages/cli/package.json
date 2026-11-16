@@ -40,7 +40,7 @@
     "url": "git+https://github.com/radiustechsystems/tools.git",
     "directory": "packages/cli"
   },
-  "homepage": "https://github.com/radiustechsystems/tools#readme",
+  "homepage": "https://docs.radiustech.xyz/reference/radius-cli",
   "bugs": {
     "url": "https://github.com/radiustechsystems/tools/issues"
   },

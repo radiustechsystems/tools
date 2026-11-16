@@ -754,9 +754,10 @@ async function run() {
         const eip3009First = await radiusFacilitator(t);
         const s1 = await sellerWith({ url: eip3009First.url });
         const r1 = await fetch(url(s1));
-        await t.check(`${at} eip3009-first facilitator: EIP-3009 offer, gas sponsoring declared`, () => {
+        await t.check(`${at} eip3009-first facilitator: EIP-3009 offer, no gas-sponsoring declaration`, () => {
           assert.equal(challengeOf(r1).accepts[0].extra.assetTransferMethod, 'eip3009');
-          assert.ok('eip2612GasSponsoring' in (challengeOf(r1).extensions ?? {}));
+          // EIP-3009 needs no approval, so there is nothing to sponsor even though the facilitator lists it.
+          assert.ok(!('eip2612GasSponsoring' in (challengeOf(r1).extensions ?? {})), 'no sponsoring on an EIP-3009 offer');
           if (mpp) assert.equal(parseMppChallenges(r1.headers.get('www-authenticate')).length, 1);
         });
         const permit2First = await t.facilitator({ name: 'permit2-first', networks: [{ ...RADIUS_KIND, methods: ['permit2', 'eip3009'] }] });
@@ -767,6 +768,13 @@ async function run() {
           assert.ok(!('eip2612GasSponsoring' in (challengeOf(r2).extensions ?? {})), 'unsupported sponsoring is stripped');
           // MPP's evm charge is EIP-3009 only, so a Permit2-only offer has no MPP mirror.
           assert.equal(r2.headers.get('www-authenticate'), null);
+        });
+        const sponsoredPermit2 = await t.facilitator({ name: 'permit2-first-sponsored', networks: [{ ...RADIUS_KIND, methods: ['permit2', 'eip3009'] }], extensions: ['eip2612GasSponsoring'] });
+        const s2s = await sellerWith({ url: sponsoredPermit2.url });
+        const r2s = await fetch(url(s2s));
+        await t.check(`${at} permit2-first facilitator with sponsoring: Permit2 offer, gas sponsoring declared`, () => {
+          assert.equal(challengeOf(r2s).accepts[0].extra.assetTransferMethod, 'permit2');
+          assert.ok('eip2612GasSponsoring' in (challengeOf(r2s).extensions ?? {}));
         });
         const viaPermit2 = await buyer()(url(s2));
         await t.check(`${at} Permit2 payment settles`, () => {

@@ -6,6 +6,10 @@ newest first, as `## <version> (<YYYY-MM-DD>)` with the date it reached `main`. 
 notes (docs.radiustech.xyz/release-notes) are built from this file: write each change's first
 sentence for developers who use the skills.
 
+## 0.2.5 (2026-11-16)
+
+- The `x402` skill says the legacy `cast` flow and `scripts/x402-pay.mjs` sign only a sponsored Permit2 offer, so they cannot pay the EIP-3009 offers that `radius-sdk` sellers on Radius send; use `radius-cli` or `createRadiusFetch()` for those. It also says Permit2 offers come from `upto` and from facilitators that do not offer EIP-3009.
+
 ## 0.2.4 (2026-11-16)
 
 - The `x402` skill's facilitator table says each Radius facilitator also settles its tier's Base network: `facilitator.radiustech.xyz` for Radius mainnet and Base, `facilitator.testnet.radiustech.xyz` for Radius testnet and Base Sepolia.

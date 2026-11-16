@@ -145,7 +145,7 @@ Follow the shared Radius wallet convention from the **radius-dev** skill:
 
 - Fresh one-shot agent demos and terminal access should use `radius-cli wallet pay`.
 - App-code clients should use `createRadiusFetch()` with a viem account or wallet client. Store any key material in the application's secrets system.
-- [x402-cli-cast.md](references/x402-cli-cast.md) and `scripts/x402-pay.mjs` are legacy/specialized references for environments that cannot use `radius-cli`.
+- [x402-cli-cast.md](references/x402-cli-cast.md) and `scripts/x402-pay.mjs` are legacy/specialized references for environments that cannot use `radius-cli`. Both sign only a sponsored Permit2 offer, so they cannot pay the EIP-3009 offers that `radius-sdk` sellers on Radius send; use `radius-cli` or `createRadiusFetch()` for those.
 - Never request, log, hardcode, or pass raw private keys as CLI arguments such as `--private-key`.
 
 ## Operating procedure

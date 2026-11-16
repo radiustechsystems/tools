@@ -5,7 +5,8 @@ terminal and agent access to x402-gated endpoints. Use this `cast` flow only as
 a fallback in environments that cannot use `radius-cli` and already have a
 funded Foundry keystore account. This specialized flow supports only a v2
 `exact` Permit2 offer with EIP-2612 gas sponsoring; use the CLI or SDK for
-other versions and schemes.
+other versions, schemes and transfer methods. Sellers using `radius-sdk` with
+the Radius facilitator offer EIP-3009, which this flow does not sign.
 
 For fresh agent-created wallets, use `RADIUS_HOME=.radius radius-cli wallet pay
 ...` as described in [x402-client.md](x402-client.md), not the Foundry
