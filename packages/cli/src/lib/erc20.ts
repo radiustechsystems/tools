@@ -23,12 +23,20 @@ export function parseTokenArg(cfg: ResolvedConfig, arg: string): TokenInput {
   throw new Error(`Token must be SBC or a 0x contract address, got: ${arg}`);
 }
 
-/** A display amount like `1.5` (parsed with the token's decimals by the SDK) or `max` for an unlimited approval. */
-export function parseAmountArg(arg: string): TokenAmount {
+/**
+ * A display amount like `1.5` (parsed with the token's decimals by the SDK). With `allowMax`, `max` is the
+ * unlimited amount; only `wallet approve` accepts it, since a transfer of 2^256-1 can only revert or burn gas.
+ */
+export function parseAmountArg(arg: string, { allowMax = false }: { allowMax?: boolean } = {}): TokenAmount {
   const trimmed = arg.trim();
-  if (trimmed.toLowerCase() === 'max') return maxUint256;
+  if (trimmed.toLowerCase() === 'max') {
+    if (allowMax) return maxUint256;
+    throw new Error(`Amount must be a decimal number like 1.5 ("max" is only for wallet approve), got: ${arg}`);
+  }
   if (!/^\d+(\.\d+)?$/.test(trimmed)) {
-    throw new Error(`Amount must be a decimal number like 1.5 (or "max" for an unlimited approval), got: ${arg}`);
+    throw new Error(
+      `Amount must be a decimal number like 1.5${allowMax ? ' (or "max" for an unlimited approval)' : ''}, got: ${arg}`,
+    );
   }
   return trimmed;
 }

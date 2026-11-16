@@ -81,10 +81,11 @@ describe('token arguments', () => {
     expect(() => parseTokenArg(cfg, 'RUSD')).toThrow(/SBC or a 0x contract address/);
     expect(() => parseTokenArg(cfg, '0x1234')).toThrow(/SBC or a 0x contract address/);
   });
-  it('amounts stay display strings for the SDK to parse; "max" is an unlimited approval', () => {
+  it('amounts stay display strings for the SDK to parse; "max" is an unlimited approval only where allowed', () => {
     expect(parseAmountArg('1.5')).toBe('1.5');
     expect(parseAmountArg(' 10 ')).toBe('10');
-    expect(parseAmountArg('MAX')).toBe(maxUint256);
+    expect(parseAmountArg('MAX', { allowMax: true })).toBe(maxUint256);
+    expect(() => parseAmountArg('max')).toThrow(/only for wallet approve/);
     expect(() => parseAmountArg('-1')).toThrow(/decimal number/);
     expect(() => parseAmountArg('1e6')).toThrow(/decimal number/);
   });

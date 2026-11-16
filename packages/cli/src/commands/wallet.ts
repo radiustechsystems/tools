@@ -395,7 +395,7 @@ export function registerWallet(program: Command): void {
       const cfg = resolveConfig(opts);
       if (!isAddress(spender)) throw new Error(`Not a valid address: ${spender}`);
       const token = parseTokenArg(cfg, tokenArg);
-      const amount = parseAmountArg(amountArg);
+      const amount = parseAmountArg(amountArg, { allowMax: true });
       const gas = parseGasLimit(subOpts.gasLimit);
 
       const account = await requireAccount(cfg, opts.privateKey);
