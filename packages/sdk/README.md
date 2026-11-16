@@ -271,7 +271,8 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   facilitator does not advertise `upto` yet, so it is unit-tested only.
 - Receipts are checked against the offer before `onPaid`: network (a Radius receipt cannot satisfy
   a Base offer), payer, transaction format and the scheme's amount rules; a mismatch throws
-  `invalid_receipt` with `details.reason` and the unread `details.response`. `receipt.charge`
+  `invalid_receipt` with `details.reason` and the unread `details.response` (after a redirect,
+  the followed response that holds the paid content). `receipt.charge`
   separates the authorised maximum (`authorized`) from the reported charge (`reported`), and
   `receipt.asset` / `receipt.decimals` name the token. A receipt is the server's report, not proof:
   `payFetch.reconcilePayment(receipt, offer)` (or `reconcilePayment` from `radius-sdk/client`)

@@ -321,7 +321,7 @@ A receipt is what the server or facilitator reports. Decoding it does not prove 
 - its transaction is not a 32-byte hex hash, or a non-zero charge names no transaction;
 - its amount is malformed, differs from an `exact` price, or exceeds the `upto` maximum.
 
-The error's `details` has `reason` (for example `network_mismatch`), the decoded `receipt`, and, from `createRadiusFetch`, the unread `response`. A successful `upto` receipt without an amount is not an error, and it is not read as the maximum: `amount` stays unset and `charge.evidence` is `incomplete`.
+The error's `details` has `reason` (for example `network_mismatch`), the decoded `receipt`, and, from `createRadiusFetch`, the unread `response` that carries the paid content. When the seller redirects after payment, that is the followed response, not the redirect. A successful `upto` receipt without an amount is not an error, and it is not read as the maximum: `amount` stays unset and `charge.evidence` is `incomplete`.
 
 ## Settlements
 

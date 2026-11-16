@@ -1054,7 +1054,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
    * Decode the settlement receipt and check it against the offer (`validatePaymentReceipt`): the
    * network, this wallet as payer, the transaction format and the scheme's amount rules. A receipt
    * that decodes but fails a check is `invalid_receipt` (details: `InvalidReceiptDetails`, with the
-   * unread `response`). A header that does not decode at all is `invalid_receipt` for `upto` and no
+   * unread `response` that carries the paid content: after a redirect, the followed one). A header that does not decode at all is `invalid_receipt` for `upto` and no
    * receipt for `exact`. A successful `upto` receipt without an amount is incomplete evidence, never
    * the authorised maximum.
    */
@@ -1215,10 +1215,11 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
   /**
    * Read what the response to a paid request says about the payment. The receipt decides when there
    * is one; without one, a `402` is a rejection, a success is a delivery, a `5xx`, `408` or `429` is
-   * unknown, and another `4xx` is a refusal that settled nothing. Throws `invalid_receipt` like `payFetch`.
+   * unknown, and another `4xx` is a refusal that settled nothing. Throws `invalid_receipt` like `payFetch`,
+   * with `content` (the response the caller gets: after a redirect, the followed one) in `details.response`.
    */
-  const inspect = async (res: Response, offer: PaymentOffer): Promise<Inspection> => {
-    const receipt = offer.protocol === 'x402' ? x402Receipt(res, offer) : mppReceipt(res, offer);
+  const inspect = async (res: Response, offer: PaymentOffer, content: Response = res): Promise<Inspection> => {
+    const receipt = offer.protocol === 'x402' ? x402Receipt(res, offer, content) : mppReceipt(res, offer);
     const retryAfterMs = parseRetryAfter(res.headers.get('retry-after'));
     let status: SettlementStatus;
     let reason: string;
@@ -1273,10 +1274,10 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     }
     let seen: Inspection;
     try {
-      seen = await inspect(second, offer);
+      seen = await inspect(second, offer, sent.result ?? second);
     } catch (error) {
       const reason = `The seller's receipt could not be trusted: ${errorMessage(error)}`;
-      return { status: 'unknown', offer, attempts, pending: unsettled(pending, 'unknown', reason), reason, response: second, error };
+      return { status: 'unknown', offer, attempts, pending: unsettled(pending, 'unknown', reason), reason, response: sent.result ?? second, error };
     }
     const { receipt } = seen;
     switch (seen.status) {
@@ -1450,7 +1451,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
       throw new RadiusPaymentError('payment_rejected', message, details);
     }
     if (sent.error !== undefined) throw sent.error; // the redirect after payment failed
-    const seen = await inspect(second, offer); // throws invalid_receipt, as before
+    const seen = await inspect(second, offer, sent.result ?? second); // throws invalid_receipt, as before
     if (seen.receipt) await reportPaid(seen.receipt, offer);
     if (seen.status === 'pending' || seen.status === 'unknown') await reportPending(unsettled(sent.pending, seen.status, seen.reason, seen));
     return sent.result ?? second;
@@ -1532,9 +1533,10 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
 
   const classify: SettlementClassifier = options.classifySettlement ?? classifySettlement;
 
-  const x402Receipt = (res: Response, offer: X402Offer): PaymentReceipt | undefined => {
+  /** The receipt on `res`; a failed check reports `content` (the response the caller gets) as `details.response`. */
+  const x402Receipt = (res: Response, offer: X402Offer, content: Response = res): PaymentReceipt | undefined => {
     const header = res.headers.get('payment-response') ?? res.headers.get('x-payment-response');
-    return header ? decodeReceipt(header, offer, res) : undefined;
+    return header ? decodeReceipt(header, offer, content) : undefined;
   };
 
   /** `Payment-Receipt` of an MPP payment, completed with what the payer knows: itself, and the amount (a charge settles exactly that). */
