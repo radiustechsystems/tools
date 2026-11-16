@@ -60,7 +60,7 @@ A free allowance and a rate limit each count requests per window, such as `1h` o
 | All requests combined | Everyone together                                       |
 | Verified agent        | Verified agent, whatever address its requests come from |
 
-Behind a proxy, set the project's client IP to the header your proxy sets, under **Defaults**. Otherwise every request counts against the proxy's address.
+Behind a proxy, set the project's client IP to the header your proxy sets: open the project's **Settings** and find **Client IP address** in the **Defaults** card. Otherwise every request counts against the proxy's address.
 
 ## Rules for verified agents
 
@@ -77,6 +77,9 @@ This policy lets search engines and link previews in free, gives signed agents a
 
 ```yaml
 schema: radius.policy/0.2
+defaults:
+  payment:
+    pay_to: '<your registered wallet address>'
 rules:
   - id: verified-bots
     match:
@@ -109,6 +112,8 @@ endpoints:
           description: Report, per call
 ```
 
+The charge rules pay the wallet in `defaults.payment.pay_to`, and a charge rule with no wallet doesn't compile. Importing a document replaces the whole policy, so start from your own policy's `defaults` block rather than pasting this example as it is.
+
 :::note[Agent rules need a recent gate]
 Agent rules save the policy as `radius.policy/0.2`. A Worker reads them from `@radiustech/platform-sdk` 0.2.0 or later. Count their limits by verified agent: one operator's agents share IP addresses, so a per-IP allowance is spent by all of them at once.
 :::
@@ -130,13 +135,15 @@ Every available token is accepted unless you remove it. A project keeps at least
 
 Defaults apply when no rule decides, and when a gate is on its own.
 
-| Setting                              | Options                             | What it does                                                                                                                |
-| ------------------------------------ | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Requests no rule matches             | Allow (default), Deny               | Allow serves them free. Deny refuses them with `403`                                                                        |
-| Before a gate has fetched any policy | Allow (default), Deny               | Allow serves every request free until a policy loads. Deny answers `503`                                                    |
-| When a gate can't count requests     | Within the limit (default), over it | Within skips rate limits and serves free-allowance routes free. Over answers `429` on rate limits and charges every request |
-| Client IP address                    | The connection (default), a header  | Where a gate reads the caller's address                                                                                     |
-| Response headers                     | `RateLimit`, `Retry-After`          | Which headers limited responses carry                                                                                       |
+| Setting                              | Options                             | What it does                                                                                                                                             |
+| ------------------------------------ | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Requests no rule matches             | Allow (default), Deny               | Allow serves them free. Deny refuses them with `403`                                                                                                     |
+| Before a gate has fetched any policy | Allow (default), Deny               | Allow serves every request free until a policy loads. Deny answers `503`                                                                                 |
+| When a gate can't count requests     | Within the limit (default), over it | Within skips rate limits and serves free-allowance requests free. Over answers `429` on rate limits and applies the rule's own action on free allowances |
+| Client IP address                    | The connection (default), a header  | Where a gate reads the caller's address                                                                                                                  |
+| Response headers                     | `RateLimit`, `Retry-After`          | Which headers limited responses carry                                                                                                                    |
+
+With over, a charge rule with a free allowance charges every request while counting fails. An allow rule with a free allowance still serves free, because its own action is allow.
 
 :::warning[A live project can fail open]
 With the defaults, paid routes are free while a gate can't load a policy. On a live project, choose **Deny** for **Before a gate has fetched any policy** and pass `noPolicy: 'deny'` to the SDK. The SDK reads that setting from its own options, not from the policy.

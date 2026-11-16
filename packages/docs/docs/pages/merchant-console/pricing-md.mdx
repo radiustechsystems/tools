@@ -11,21 +11,28 @@ Radius builds the file from your policy, so it changes when your prices do.
 
 ## What the file lists
 
-Your organization has one `pricing.md`. It opens with your organization's name, then has a section per published catalog. A catalog is one project's paid endpoints.
+Your organization has one `pricing.md`. It opens with your organization's name and a short note on how to pay, then has a section per published catalog. A catalog is one project's paid endpoints.
 
 ```md
 ## Reports API
 
 - Base URL: https://api.example.com
-- Payment: x402, SBC on Radius or USDC on Base
+- Payment: x402, SBC on Radius
 
 ### Report lookup
 
-- Request: GET /reports/:id
+- Request: `GET /reports/:id`
 - Price: $0.002 / request
+- Free: 20 requests per 5 minutes per IP
+
+### Bulk export
+
+- Request: `POST /reports/export`
+- Price: $0.05 / request
+- Rate limit: 10 requests per second per caller
 ```
 
-An endpoint with a free allowance or a rate limit also lists them, on `Free` and `Rate limit` lines. A catalog in test mode carries the line `Mode: test (no real money)`, so agents know nobody pays real money.
+This is the file as Radius writes it: prices are in US dollars per request, with a `$`. An endpoint with rules for verified agents also carries a `Who pays` line, and a catalog in test mode carries `Mode: test (no real money)`, so agents know nobody pays real money.
 
 ## Publish a catalog
 
@@ -71,10 +78,17 @@ export default withRadius(handler, { pricingMd: true });
 - The **Base URL** line is `RADIUS_PUBLIC_URL` when set, otherwise the request's origin.
 - The file is stored in the `RADIUS_POLICY` KV namespace and synced on the same schedule as the policy.
 
-A Worker with its own `scheduled()` handler calls `syncPricingMd()` there:
+A Hono app needs both halves: `pricingMd: true` on the middleware, which serves the file, and `syncPricingMd()` in its `scheduled()` handler, which fetches it.
 
 ```ts
-import { syncPolicy, syncPricingMd } from '@radiustech/platform-sdk';
+// src/index.ts
+import { radiusPolicy, syncPolicy, syncPricingMd } from '@radiustech/platform-sdk';
+import { Hono } from 'hono';
+
+export { RadiusCounter } from '@radiustech/platform-sdk/limiters/do';
+
+const app = new Hono<{ Bindings: Env }>();
+app.use('*', radiusPolicy({ pricingMd: true }));
 
 export default {
   fetch: app.fetch,

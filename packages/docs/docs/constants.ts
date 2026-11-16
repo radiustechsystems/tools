@@ -22,6 +22,8 @@ export const NATIVE_TOKEN_DECIMALS = 18;
 // Radius Merchant Console, the main call to action of the site banner and /merchant-console.
 // `ref=docs` is the signup attribution label the console records for visitors the docs send.
 export const MERCHANT_CONSOLE_URL = 'https://app.radiustech.xyz?tabs=1&ref=docs';
+// Radius platform MCP server, which agents connect to (docs/pages/merchant-console/agents.mdx)
+export const PLATFORM_MCP_URL = 'https://platform-api.radiustech.xyz/mcp';
 export const FAUCET_DASHBOARD_PATH = '/wallet';
 export const FAUCET_TESTNET_API_URL = 'https://testnet.radiustech.xyz/api/v1/faucet';
 

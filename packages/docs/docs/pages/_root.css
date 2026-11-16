@@ -697,13 +697,3 @@ footer a:focus-visible {
   outline: 2px solid #eb6359;
   outline-offset: 2px;
 }
-
-/* Screens from the console walkthrough: dark UI with a transparent canvas. */
-img.mc-shot {
-  display: block;
-  width: 100%;
-  max-width: 720px;
-  height: auto;
-  margin: 1.5rem 0;
-  border-radius: 0.75rem;
-}

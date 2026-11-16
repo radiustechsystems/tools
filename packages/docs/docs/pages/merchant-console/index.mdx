@@ -71,13 +71,9 @@ The project overview tracks the same path as a checklist: base URL set, default 
 
 ## Let an agent do it
 
-Add the Radius platform MCP server to your agent, then ask in plain words. The agent signs in as you and acts with your permissions.
+Add the Radius platform MCP server to Claude Code, Codex, Cursor or another agent, then ask in plain words. The agent signs in as you and acts with your permissions: it imports endpoints, changes prices, publishes the catalog and reads what each endpoint earned.
 
-```bash
-claude mcp add --transport http radius-platform https://platform-api.radiustech.xyz/mcp
-```
-
-Prices are meant to move. An agent can read what each endpoint earned with `get_earnings`, compare it with the policy from `get_policy`, and reprice with `update_endpoint`. Each change saves a new policy version that your gate picks up within a minute. See [manage with an agent](/merchant-console/agents).
+Prices are meant to move, and each change an agent saves reaches your gate within a minute. See [manage with an agent](/merchant-console/agents) for the setup and the repricing loop.
 
 ## Get access
 

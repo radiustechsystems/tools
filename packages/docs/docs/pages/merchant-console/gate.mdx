@@ -33,7 +33,7 @@ Store the connector key as a secret in your gate's runtime. The Radius platform 
 
 ## Cloudflare Worker
 
-These steps use `@radiustech/platform-sdk` 0.3.0 or later.
+These steps work with `@radiustech/platform-sdk` 0.2.0 or later. Two things differ before 0.3.0, and the notes below mark them.
 
 ### 1. Install the SDK
 
@@ -140,7 +140,10 @@ The SDK finds everything by name, so there is no configuration object unless you
 | `RADIUS_PUBLIC_URL`      | Variable       | The URL buyers call, when a proxy in front of the Worker changes the host | Behind a proxy                               |
 | `RADIUS_ORGANIZATION_ID` | Variable       | The project's organization. The SDK resolves it from the key when unset   | No                                           |
 
-From 0.3.0, charging a request no longer needs `RADIUS_LIMITER`. The SDK keeps no record of payments and relies on the facilitator to settle each payment at most once. Keep the binding anyway: it also keeps overlapping policy syncs in order.
+`RADIUS_LIMITER` depends on the SDK version:
+
+- **0.3.0 or later.** Charging doesn't need it. The SDK keeps no record of payments and relies on the facilitator to settle each payment at most once. Keep the binding anyway: it also keeps overlapping policy syncs in order.
+- **0.2.0.** `RadiusCounter` also records payment claims, so a Worker that charges needs the binding even when no rule has a limit.
 
 :::warning[Replacing an existing paywall]
 Until its first policy loads, a Worker allows every request. Pass `noPolicy: 'deny'` to `withRadius()` or `radiusPolicy()` when the Worker replaces a paywall: it then answers `503 policy_unavailable` instead of serving paid routes free.
@@ -208,7 +211,7 @@ In a Caddyfile, change your site's block:
  }
 ```
 
-Then set the project's client IP to the `X-Real-IP` header in the project's **Settings**. Rate limits and free quotas then count each caller, not your proxy.
+Then set the project's client IP to the `X-Real-IP` header: open the project's **Settings** and find **Client IP address** in the **Defaults** card. Rate limits and free quotas then count each caller, not your proxy.
 
 ### 5. Check it
 
@@ -236,7 +239,7 @@ Run the same image as a Deployment in front of your API's Service.
 
 3. **Point your Ingress at the `radius-gateway` Service** on port 8080 instead of your API's Service.
 
-4. **Set the project's client IP** in **Settings** to the header your ingress controller puts the caller's address in. ingress-nginx sets `X-Real-IP`.
+4. **Set the project's client IP**, in the **Defaults** card of the project's **Settings**, to the header your ingress controller puts the caller's address in. ingress-nginx sets `X-Real-IP`.
 
 ## Read the gate status
 
@@ -249,7 +252,7 @@ The **Gate** page and the project overview show whether a gate is fetching the p
 | Upgrade needed | The gate's version is older than the minimum the platform supports |
 | No gate seen   | No gate has fetched this policy yet                                |
 
-The status names the gate and its version, for example `platform-sdk 0.3.0` or `radius-gateway 0.1.0`. The SDK identifies itself from 0.3.0; an earlier version shows as an unidentified gate. An agent reads the same status with the `get_gate_status` tool; see [manage with an agent](/merchant-console/agents).
+The status names the gate and its version, for example `platform-sdk 0.3.0` or `radius-gateway 0.1.0`. The SDK identifies itself from 0.3.0. On 0.2.0 it still connects, and the status names it as an unidentified gate. An agent reads the same status with the `get_gate_status` tool; see [manage with an agent](/merchant-console/agents).
 
 ## Replace or revoke the key
 

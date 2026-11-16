@@ -3,20 +3,20 @@ title: Manage with an agent
 description: Connect Claude Code, Codex, Cursor or another agent to the Radius platform MCP server to import endpoints, change prices, publish pricing.md and read earnings.
 ---
 
+import { PLATFORM_MCP_URL } from '../../constants';
+
 # Manage with an agent [Run your pricing from a prompt]
 
 The Radius platform MCP server gives an agent the same controls as the Merchant Console. The agent signs in as you and acts with your permissions, so it can do what your role allows and nothing more.
 
 ## Connect your agent
 
-The server is at `https://platform-api.radiustech.xyz/mcp`. In the Merchant Console, **Connect agent** at the foot of the sidebar shows the snippet for your agent.
+The server is at <code>{PLATFORM_MCP_URL}</code>. In the Merchant Console, **Connect agent** at the foot of the sidebar shows the snippet for your agent.
 
-| Agent       | Setup                                                                                                                                  |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Claude Code | `claude mcp add --transport http radius-platform https://platform-api.radiustech.xyz/mcp`, then run `/mcp` and choose **Authenticate** |
-| Codex       | `codex mcp add radius-platform --url https://platform-api.radiustech.xyz/mcp`, then sign in when Codex asks                            |
-| Cursor      | Add the server to `.cursor/mcp.json`, then sign in from Cursor's MCP settings                                                          |
-| OpenCode    | Add the server to `opencode.json`, then run `opencode mcp auth radius-platform`                                                        |
+- **Claude Code.** Run <code>claude mcp add --transport http radius-platform {PLATFORM_MCP_URL}</code>, then run `/mcp` and choose **Authenticate**.
+- **Codex.** Run <code>codex mcp add radius-platform --url {PLATFORM_MCP_URL}</code>, then sign in when Codex asks.
+- **Cursor.** Add the server to `.cursor/mcp.json`, then sign in from Cursor's MCP settings.
+- **OpenCode.** Add the server to `opencode.json`, then run `opencode mcp auth radius-platform`.
 
 For Cursor:
 
