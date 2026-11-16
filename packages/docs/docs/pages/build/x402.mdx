@@ -40,7 +40,7 @@ Build against the protocol directly only when the SDK does not fit, for example 
 
 ## The Radius payment challenge
 
-The `PAYMENT-REQUIRED` header holds a Base64-encoded JSON `PaymentRequired` object; the response body carries no protocol data. This is the decoded challenge `radius-sdk` sends for a 0.1 {STABLECOIN} route on mainnet, with the extension's JSON Schema omitted:
+The `PAYMENT-REQUIRED` header holds a Base64-encoded JSON `PaymentRequired` object; the response body carries no protocol data. This is the decoded challenge `radius-sdk` sends for a 0.1 {STABLECOIN} route on mainnet:
 
 ```json
 {
@@ -66,28 +66,22 @@ The `PAYMENT-REQUIRED` header holds a Base64-encoded JSON `PaymentRequired` obje
         "paymentFlow": "upfront"
       }
     }
-  ],
-  "extensions": {
-    "eip2612GasSponsoring": {
-      "info": { "description": "…", "version": "1" },
-      "schema": {}
-    }
-  }
+  ]
 }
 ```
 
-| Field                             | Meaning                                                                                                             |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `network`                         | CAIP-2 chain: <code>{MAINNET_CAIP2}</code> (mainnet) or <code>{TESTNET_CAIP2}</code> (testnet)                      |
-| `amount`                          | Base units; {STABLECOIN} has six decimals, so `"100000"` is 0.1 {STABLECOIN}                                        |
-| `extra.assetTransferMethod`       | `eip3009`: the payer signs an EIP-3009 `TransferWithAuthorization` for the token. `permit2` is the alternative      |
-| `extra.name`, `extra.version`     | The {STABLECOIN} EIP-712 domain, used to sign the authorization (and the Permit2 gas-sponsoring permit)             |
-| `extra.paymentFlow`               | Set by `radius-sdk`: `upfront` settles before the handler runs; a server-side hint that clients do not need to echo |
-| `extensions.eip2612GasSponsoring` | Applies to Permit2 offers only: the facilitator accepts an EIP-2612 permit, so a first-time payer needs no approval |
+| Field                             | Meaning                                                                                                                                                                                        |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `network`                         | CAIP-2 chain: <code>{MAINNET_CAIP2}</code> (mainnet) or <code>{TESTNET_CAIP2}</code> (testnet)                                                                                                 |
+| `amount`                          | Base units; {STABLECOIN} has six decimals, so `"100000"` is 0.1 {STABLECOIN}                                                                                                                   |
+| `extra.assetTransferMethod`       | `eip3009`: the payer signs an EIP-3009 `TransferWithAuthorization` for the token. `permit2` is the alternative                                                                                 |
+| `extra.name`, `extra.version`     | The {STABLECOIN} EIP-712 domain, used to sign the authorization (and the Permit2 gas-sponsoring permit)                                                                                        |
+| `extra.paymentFlow`               | Set by `radius-sdk`: `upfront` settles before the handler runs; a server-side hint that clients do not need to echo                                                                            |
+| `extensions.eip2612GasSponsoring` | Applies to Permit2 offers only: the facilitator accepts an EIP-2612 permit, so a first-time payer needs no approval. Absent from a challenge whose offers are all EIP-3009, like the one above |
 
 The client answers with a `PAYMENT-SIGNATURE` header: a Base64-encoded `PaymentPayload` that echoes the chosen offer in `accepted` and carries an EIP-3009 authorization: the `authorization` fields `from`, `to`, `value`, `validAfter`, `validBefore`, and `nonce`, plus the `signature`. `to` is the `payTo` address, `nonce` is a random `bytes32` the token accepts once, and `validBefore` closes the signing window. The payer needs no token approval and no gas, because the facilitator submits the signature to the token.
 
-When an offer uses Permit2 instead, the payload carries a `permit2Authorization` with a Permit2 `permitWitnessTransferFrom` signature. The spender is the canonical [`x402ExactPermit2Proxy`](/reference/contract-addresses#x402-contracts) (<code>{X402_PERMIT2_PROXY}</code>), which only transfers to the `payTo` address. When the payer has not approved Permit2 yet, the payload also carries the EIP-2612 permit under `extensions.eip2612GasSponsoring`.
+A challenge offers Permit2 for the `upto` scheme, which is Permit2-only because the facilitator charges actual usage up to a signed maximum, and with a facilitator that does not offer EIP-3009 first. `radius-sdk` declares `extensions.eip2612GasSponsoring` only on a challenge that carries a Permit2 offer. When an offer uses Permit2, the payload carries a `permit2Authorization` with a Permit2 `permitWitnessTransferFrom` signature. The spender is the canonical [`x402ExactPermit2Proxy`](/reference/contract-addresses#x402-contracts) (<code>{X402_PERMIT2_PROXY}</code>), which only transfers to the `payTo` address. When the payer has not approved Permit2 yet, the payload also carries the EIP-2612 permit under `extensions.eip2612GasSponsoring`.
 
 See the [x402 exact EVM scheme spec](https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md) for every field, and the [x402 facilitator API](/reference/facilitator-api) for `/verify` and `/settle`.
 
@@ -134,7 +128,7 @@ The token determines which x402 transfer methods are available:
 
 Because {STABLECOIN} supports EIP-3009, it is the preferred transfer method on Radius. The payer signs one authorization per payment, and the facilitator submits it with a `transferWithAuthorization` call, so the payer needs no allowance and no gas.
 
-Permit2 stays available as the alternative. The payer grants Permit2 an allowance once, through a gas-sponsored EIP-2612 permit or an approval transaction. After that, each payment is a separate Permit2 signature capped to its amount, settled in one transaction.
+Permit2 stays available as the alternative, for the `upto` scheme and for facilitators that do not offer EIP-3009. The payer grants Permit2 an allowance once, through a gas-sponsored EIP-2612 permit or an approval transaction. After that, each payment is a separate Permit2 signature capped to its amount, settled in one transaction.
 
 ## Check settlement and delivery
 
