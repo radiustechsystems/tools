@@ -11,8 +11,11 @@ The facilitator is a service that verifies x402 payment signatures and settles t
 
 | Network | Facilitator | URL |
 |---------|-------------|-----|
-| Mainnet (`eip155:723487`) | Radius | `https://facilitator.radiustech.xyz` |
-| Testnet (`eip155:72344`) | Radius | `https://facilitator.testnet.radiustech.xyz` |
+| Radius mainnet (`eip155:723487`) and Base (`eip155:8453`) | Radius | `https://facilitator.radiustech.xyz` |
+| Radius testnet (`eip155:72344`) and Base Sepolia (`eip155:84532`) | Radius | `https://facilitator.testnet.radiustech.xyz` |
+
+Each Radius facilitator settles its tier's Radius network and Base network; `/supported` lists
+the kinds (network, asset, transfer method) it serves.
 
 Alternative third-party facilitators include Stablecoin.xyz (`https://x402.stablecoin.xyz`),
 FareSide (`https://facilitator.x402.rs`, testnet only), and Middlebit (`https://middlebit.com`,

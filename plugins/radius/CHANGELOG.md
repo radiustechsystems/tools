@@ -6,6 +6,10 @@ newest first, as `## <version> (<YYYY-MM-DD>)` with the date it reached `main`. 
 notes (docs.radiustech.xyz/release-notes) are built from this file: write each change's first
 sentence for developers who use the skills.
 
+## 0.2.4 (2026-11-16)
+
+- The `x402` skill's facilitator table says each Radius facilitator also settles its tier's Base network: `facilitator.radiustech.xyz` for Radius mainnet and Base, `facilitator.testnet.radiustech.xyz` for Radius testnet and Base Sepolia.
+
 ## 0.2.3 (2026-11-09)
 
 - The `x402` and `radius-dev` skills now say SBC on Radius supports EIP-3009, the preferred x402 transfer method. The payer signs one `TransferWithAuthorization` and needs no Permit2 approval and no gas, and the Radius facilitators list `eip3009` before `permit2`. Permit2 is no longer called the recommended path. The `x402` skill adds an EIP-3009 signing example and gotchas (the `Stable Coin` / `1` domain, `to` = `payTo`, a random `bytes32` nonce, the `validBefore` window), and scopes the Permit2, EIP-2612 and gas-sponsoring guidance to Permit2 offers.
