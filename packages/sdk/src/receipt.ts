@@ -2,6 +2,7 @@ import { decodePaymentResponseHeader } from '@x402/core/http';
 import { explorerTxUrl, type PaymentNetwork } from './networks.js';
 import { MPP_RECEIPT_HEADER, parseMppReceipt } from './mpp.js';
 import { RadiusPaymentError } from './errors.js';
+import { classifySettlement, type SettlementClassifier } from './outcome.js';
 
 /** Decoded `PAYMENT-RESPONSE` (x402) or `Payment-Receipt` (MPP) header: what was settled. */
 export interface PaymentReceipt {
@@ -38,8 +39,8 @@ export interface PaymentReceipt {
 }
 
 /**
- * How much evidence a receipt carries about the amount charged. More values may be added later
- * (for example for pending outcomes); treat a value you do not recognise as unverified.
+ * How much evidence a receipt carries about the amount charged. More values may be added later;
+ * treat a value you do not recognise as unverified.
  *
  * - `reported`: the server reported the actual charge (`charge.reported`).
  * - `implied`: `exact` scheme; the server reported success and the scheme fixes the charge at the offered amount.
@@ -47,8 +48,11 @@ export interface PaymentReceipt {
  * - `incomplete`: `upto` scheme; the server reported success without the actual charge. Anything from
  *   zero to `charge.authorized` may have moved; reconcile the transaction on chain to learn the amount.
  * - `failed`: the server reported that settlement failed.
+ * - `pending`: the server reported that settlement was submitted but has no final result yet
+ *   (`errorReason: 'settlement_pending'`). Nothing is proven either way; `transaction`, when set, is
+ *   the broadcast hash to reconcile. Present the same payment again rather than signing another.
  */
-export type ChargeEvidence = 'reported' | 'implied' | 'zero' | 'incomplete' | 'failed';
+export type ChargeEvidence = 'reported' | 'implied' | 'zero' | 'incomplete' | 'failed' | 'pending';
 
 /** The charge as the receipt describes it, kept apart from what the chain confirms. Amounts are atomic strings. */
 export interface PaymentCharge {
@@ -73,6 +77,8 @@ export interface ReceiptExpectation {
   decimals?: number;
   /** The address that signed the payment. A receipt naming another payer is rejected. */
   payer?: string;
+  /** Recognises a pending failure receipt (`charge.evidence: 'pending'`). Default `classifySettlement`. */
+  classify?: SettlementClassifier;
 }
 
 /** Why `validatePaymentReceipt` rejected a receipt (`RadiusPaymentError` code `invalid_receipt`). */
@@ -179,6 +185,9 @@ function invalidReceipt(reason: InvalidReceiptReason, message: string, receipt?:
  * - has a transaction that is not a 32-byte hex hash, or no transaction for a non-zero charge,
  * - reports an amount that is malformed, differs from an `exact` price, or exceeds the `upto` maximum.
  *
+ * A failure receipt is not rejected: its `charge.evidence` is `pending` when it reports a pending
+ * settlement (a transaction it names must still be a hash), else `failed`.
+ *
  * A successful `upto` receipt without an amount is not rejected, but it is not read as the maximum
  * either: `amount` stays undefined and `charge.evidence` is `incomplete`. A reported zero charge
  * needs no transaction (`charge.evidence` is `zero`). For `exact`, `amount` is the offer price.
@@ -199,7 +208,11 @@ export function validatePaymentReceipt(receipt: PaymentReceipt, expected: Receip
   const reported = receipt.amount === undefined ? undefined : String(receipt.amount);
 
   if (!receipt.success) {
-    return { ...out, amount: undefined, charge: { scheme: expected.scheme, authorized, reported: undefined, evidence: 'failed' } };
+    const pending = (expected.classify ?? classifySettlement)(receipt) === 'pending';
+    if (pending && receipt.transaction !== undefined && !EVM_TX_HASH.test(receipt.transaction)) {
+      throw invalidReceipt('malformed_transaction', `transaction ${JSON.stringify(receipt.transaction)} is not a 32-byte hex hash`, receipt);
+    }
+    return { ...out, amount: undefined, charge: { scheme: expected.scheme, authorized, reported: undefined, evidence: pending ? 'pending' : 'failed' } };
   }
   // x402 v1 receipts may name the network by its v1 alias.
   const accepted = network ? [network.network, ...network.v1Names] : [expectedNetwork];

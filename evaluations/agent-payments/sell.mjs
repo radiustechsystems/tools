@@ -784,13 +784,26 @@ async function run() {
           assert.equal(custom.calls.supported, 1);
         });
 
-        // Failure modes, per settle order: rejection is a 402, an unknown outcome is a 502, and content is withheld.
+        // Failure modes, per settle order: rejection is a 402 and content is withheld. An unknown outcome is a 502
+        // with content withheld, except 'after' under the SDK's own adapters: the handler has run and /verify would
+        // refuse the payment once it settles, so they deliver with a PAYMENT-RESPONSE that marks the outcome unknown.
         for (const settle of ['before', 'after']) {
           const fac = await radiusFacilitator(t);
           const seller = await sellerWith({ url: fac.url, timeoutMs: 500 }, { settle });
           const hits = () => seller.hitsOf('GET /api/report');
           const attempt = () => buyer()(url(seller)).then(read, (error) => ({ error }));
-          const ran = settle === 'after' ? 1 : 0; // 'after' runs the handler before settling, then withholds its body
+          const ran = settle === 'after' ? 1 : 0; // 'after' runs the handler before settling
+          const delivers = settle === 'after' && kind !== 'express'; // @x402/express keeps x402 core's answer
+          const unknownOutcome = (res) => {
+            if (!delivers) {
+              assert.equal(res.status, 502);
+              assert.doesNotMatch(res.text, /CONTENT:/);
+              return;
+            }
+            assert.equal(res.status, 200);
+            assert.match(res.text, /CONTENT:/);
+            assert.equal(fromB64(res.headers.get('payment-response')).errorReason, 'settlement_unknown');
+          };
 
           fac.reset({ settle: 'reject' });
           const rejection = await attempt();
@@ -804,22 +817,21 @@ async function run() {
 
           fac.reset({ settle: 'hang' });
           const timeout = await attempt();
-          await t.check(`${at}/${settle} facilitator timeout: 502 (unknown outcome), content withheld`, () => {
-            assert.equal(timeout.status, 502);
-            assert.doesNotMatch(timeout.text, /CONTENT:/);
+          await t.check(`${at}/${settle} facilitator timeout: unknown outcome, ${delivers ? 'delivered and marked unknown' : '502, content withheld'}`, () => {
+            unknownOutcome(timeout);
             assert.equal(hits(), 2 * ran);
           });
 
           fac.reset({ settle: 'drop-after-submit' });
           const dropped = await attempt();
-          await t.check(`${at}/${settle} connection dropped after settlement: 502, content withheld, funds moved`, () => {
-            assert.equal(dropped.status, 502);
-            assert.doesNotMatch(dropped.text, /CONTENT:/);
+          await t.check(`${at}/${settle} connection dropped after settlement: unknown outcome, ${delivers ? 'delivered and marked unknown' : '502, content withheld'}, funds moved`, () => {
+            unknownOutcome(dropped);
             assert.equal(fac.settled.length, 1, 'the mock chain recorded the settlement the seller never confirmed');
             assert.equal(hits(), 3 * ran);
           });
           // 'after' ran the handler before settlement failed: its headers must be withheld along with its body.
-          const noHeaders = () => assert.deepEqual([rejected, timeout, dropped].map(headerLeaks), [false, false, false]);
+          const withheld = delivers ? [rejected] : [rejected, timeout, dropped];
+          const noHeaders = () => assert.deepEqual(withheld.map(headerLeaks), withheld.map(() => false));
           const headerGap = settle === 'after' && {
             hono: "radius-sdk/hono assigns c.res and Hono's setter merges the handler response's headers into the SDK's failure response",
             express: '@x402/express drops the buffered body on a failed settlement but keeps headers the handler already set',

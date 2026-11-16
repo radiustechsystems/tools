@@ -12,6 +12,8 @@ import { PERMIT2_ADDRESS, explorerTxUrl, isNetworkId, overridesOf, resolveNetwor
 import { decodeMppReceipt, decodePaymentReceipt, validatePaymentReceipt, type InvalidReceiptDetails, type PaymentReceipt } from '../receipt.js';
 import { MPP_INTENT, MPP_METHOD, MPP_RECEIPT_HEADER, mppChallengeNonce, mppSource, parseMppChallenges, serializeMppCredential, type MppChallenge } from '../mpp.js';
 import { getSettlement, reconcilePayment, type PaymentReconciliation, type ReconcileOffer, type ReconcileOptions, type Settlement } from '../settlement.js';
+import { isPermit2NonceUsed } from '../permit2.js';
+import { classifySettlement, SETTLEMENT_PENDING_REASON, type SettlementClassifier, type SettlementStatus } from '../outcome.js';
 
 /**
  * Who pays: a private key, a viem local account (or any `{ address, signTypedData }`),
@@ -101,6 +103,167 @@ export interface PaymentRejectedDetails {
   /** `error` from the decoded `PAYMENT-REQUIRED` header, when the server sent one (x402). */
   error?: string;
   challenge?: PaymentRequired;
+  /**
+   * Set when the 402 carries a receipt reporting a pending settlement (`errorReason:
+   * 'settlement_pending'`, as x402 core answers through upstream adapters): the payment is not
+   * rejected. Pass it to `payFetch.resume`; do not sign a new payment.
+   */
+  pending?: PendingPayment;
+}
+
+/**
+ * The signed authorization inside a payment, as far as the chain can check it. `nonce` and
+ * `validBefore` identify it on chain: an EIP-3009 `authorizationState(from, nonce)` or a Permit2
+ * nonce bit. Until `validBefore`, whoever holds the signed payment can settle it.
+ */
+export interface SignedAuthorization {
+  kind: 'eip3009' | 'permit2';
+  from: Address;
+  /** bytes32 hex (EIP-3009) or a decimal string (Permit2). */
+  nonce: string;
+  /** Unix seconds after which the authorization can no longer settle (EIP-3009 `validBefore`, Permit2 `deadline`). */
+  validBefore: number;
+}
+
+/** The paid request, without its payment headers, as `resume` sends it again. */
+export interface PendingPaymentRequest {
+  url: string;
+  method: string;
+  headers: [string, string][];
+  body?: Uint8Array;
+}
+
+/**
+ * A signed payment whose outcome is not final (`pending` or `unknown`), with everything needed to
+ * present the **same** payment again: the original request, the offer it pays (the expected
+ * payment context), the signed payment headers, and any settlement transaction named so far.
+ *
+ * `paymentHeaders` is a bearer credential until `authorization.validBefore`: whoever holds it can
+ * have it settled. Keep the record like a secret (never log it), and drop it once the outcome is
+ * final. It holds the offer and request as objects; to persist it across restarts, serialize it
+ * yourself.
+ */
+export interface PendingPayment {
+  status: 'pending' | 'unknown';
+  /** Why the outcome is not final, for logs and support (contains no secrets). */
+  reason: string;
+  offer: PaymentOffer;
+  request: PendingPaymentRequest;
+  /** Header name to value, exactly as first sent (`PAYMENT-SIGNATURE`, `X-PAYMENT` or `Authorization`). */
+  paymentHeaders: Record<string, string>;
+  /** Undefined when the payment's authorization could not be read (an unknown payload shape). */
+  authorization?: SignedAuthorization;
+  /** Settlement transaction named by the seller or facilitator, once one was. */
+  transaction?: `0x${string}`;
+  /** The last receipt the seller sent for this payment, if any (`charge.evidence: 'pending'`). */
+  receipt?: PaymentReceipt;
+  /** How many times the payment has been presented. */
+  attempts: number;
+  /** Epoch milliseconds. */
+  createdAt: number;
+  updatedAt: number;
+  /** The seller's `Retry-After`, in milliseconds, from the last answer. */
+  retryAfterMs?: number;
+  /**
+   * `false` when the seller delivered the resource with this unsettled receipt (an x402 seller that
+   * settles after its handler). Presenting the payment again cannot succeed there (the seller
+   * verifies it first, and a used authorization fails), so `resume` only checks the chain.
+   */
+  replayable?: boolean;
+}
+
+interface OutcomeBase {
+  offer: PaymentOffer;
+  /** How many times the payment has been presented. */
+  attempts: number;
+}
+
+/** Funds moved for this payment. `delivered` says whether `response` is the purchased resource. */
+export interface SettledPayment extends OutcomeBase {
+  status: 'settled';
+  delivered: boolean;
+  /**
+   * What shows the payment settled: the seller's `receipt`, the `chain` (the settlement
+   * transaction, see `reconciliation`), its consumed `authorization` (the chain shows the signed
+   * authorization used, the transaction unknown), or the seller's `delivery` without a receipt.
+   */
+  evidence: 'receipt' | 'chain' | 'authorization' | 'delivery';
+  response?: Response;
+  receipt?: PaymentReceipt;
+  reconciliation?: PaymentReconciliation;
+}
+
+/** Not final: present the same payment again with `payFetch.resume(outcome.pending)`. */
+export interface UnsettledPayment extends OutcomeBase {
+  status: 'pending' | 'unknown';
+  pending: PendingPayment;
+  reason: string;
+  response?: Response;
+  /** The transport error or rejected receipt behind an `unknown` outcome. */
+  error?: unknown;
+  /** True when `resume` stopped because its `signal` was aborted. The payment itself is not cancelled. */
+  aborted?: boolean;
+  /**
+   * Set when the seller answered with the resource and an unsettled receipt (`pending.replayable`
+   * is `false`): true when `response` is the purchased resource. `resume` then only checks the chain.
+   */
+  delivered?: boolean;
+}
+
+/** Refused before any settlement transaction; nothing moved. */
+export interface RejectedPayment extends OutcomeBase {
+  status: 'rejected';
+  reason: string;
+  response?: Response;
+  receipt?: PaymentReceipt;
+  /** The seller's new challenge, when the rejection was an x402 402. */
+  challenge?: PaymentRequired;
+}
+
+/** Settlement was attempted and definitively moved nothing (reverted, or the authorization expired unused). */
+export interface FailedPayment extends OutcomeBase {
+  status: 'failed';
+  reason: string;
+  response?: Response;
+  receipt?: PaymentReceipt;
+  reconciliation?: PaymentReconciliation;
+}
+
+/**
+ * Outcome of `payFetch.pay` or `payFetch.resume`. `status` follows `SettlementStatus`, plus
+ * `not_required` when the resource asked for no payment. More values may be added; treat one you
+ * do not recognise like `unknown`.
+ */
+export type PaymentOutcome = { status: 'not_required'; response: Response } | SettledPayment | UnsettledPayment | RejectedPayment | FailedPayment;
+
+/** Options of `payFetch.pay`. */
+export interface PayOptions {
+  /** Client for chain reads that confirm a reported failure (the network's own client otherwise). */
+  client?: PublicClient;
+}
+
+/**
+ * Options of `payFetch.resume`: bounded retries with exponential backoff. The wait before attempt
+ * `n` is `initialDelayMs * backoffFactor^(n-1)`, at least the seller's `Retry-After`, at most
+ * `maxDelayMs`, counted from the payment's last attempt.
+ */
+export interface ResumeOptions extends PayOptions {
+  /** Presentations of the payment in this call. Default 5. */
+  maxAttempts?: number;
+  /** Default 1000. */
+  initialDelayMs?: number;
+  /** Default 30000. */
+  maxDelayMs?: number;
+  /** Default 2. */
+  backoffFactor?: number;
+  /** Per-presentation timeout; a timeout counts as `unknown` and the next attempt follows. Default 30000. */
+  attemptTimeoutMs?: number;
+  /**
+   * Stops waiting and resolves with the latest `pending` or `unknown` outcome (`aborted: true`).
+   * This cancels the wait, **not the payment**: a signed payment can still settle until its
+   * authorization expires. Resume again later with the returned `pending`.
+   */
+  signal?: AbortSignal;
 }
 
 /** `details` of an `invalid_challenge` error raised while parsing a 402. */
@@ -164,6 +327,19 @@ export interface RadiusFetchOptions extends NetworkOverrides {
    * `payFetch.reconcilePayment(receipt, offer)` checks the chain.
    */
   onPaid?: (receipt: PaymentReceipt, offer: PaymentOffer) => void | Promise<void>;
+  /**
+   * Called when a paid request ends without a final outcome (`pending` or `unknown`: a timeout, a
+   * lost response, a `5xx`, or a receipt reporting a pending settlement), from `payFetch`, `pay` or
+   * `resume`. Keep the record (like a secret) and pass it to `payFetch.resume`: calling `payFetch`
+   * again would sign a new payment. The plain `payFetch` still returns the response or throws as
+   * before; this hook is how its callers get the record.
+   */
+  onPaymentPending?: (pending: PendingPayment) => void | Promise<void>;
+  /**
+   * Recognises a pending settlement in a receipt (`PAYMENT-RESPONSE`). Default `classifySettlement`:
+   * `errorReason: 'settlement_pending'`. Replace it to follow another facilitator contract.
+   */
+  classifySettlement?: SettlementClassifier;
   /** Underlying fetch (defaults to globalThis.fetch). */
   fetch?: typeof globalThis.fetch;
 }
@@ -224,6 +400,23 @@ export interface RadiusFetch extends NetworkWallet {
    * evidence is not available yet; never throws for that.
    */
   reconcilePayment(receipt: PaymentReceipt, offer: ReconcileOffer, options?: ReconcileOptions): Promise<PaymentReconciliation>;
+  /**
+   * Like calling `payFetch`, but resolves with a typed `PaymentOutcome` instead of throwing or
+   * returning a bare response once a payment was sent: `settled`, `pending`, `unknown`, `rejected`
+   * or `failed` (or `not_required`). Errors before anything is signed (a declined or unaffordable
+   * offer) still throw `RadiusPaymentError`. A `pending` or `unknown` outcome carries the
+   * `PendingPayment` for `resume`; this never signs a second payment.
+   */
+  pay(input: RequestInfo | URL, init?: RequestInit, options?: PayOptions): Promise<PaymentOutcome>;
+  /**
+   * Present the **same** signed payment again until it settles, fails or is rejected, within
+   * `options` (bounded attempts, backoff, `signal`). Never signs a new payment. Checks the chain
+   * where it can: a named settlement transaction that reverted is `failed`; when the seller refuses
+   * the payment again, a consumed authorization is `settled` (undelivered) and one that expired
+   * unused is `failed`. A purchase delivered on resume is the original one: same payment, no second
+   * charge.
+   */
+  resume(pending: PendingPayment, options?: ResumeOptions): Promise<PaymentOutcome>;
 }
 
 const ERC20_ABI = [
@@ -243,6 +436,87 @@ const SPONSORING_KEYS = ['eip2612GasSponsoring', 'erc20ApprovalGasSponsoring'];
 const MAX_TIMEOUT_SECONDS = 600;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const ATOMIC_AMOUNT = /^[0-9]+$/;
+
+const EXPOSED_RECEIPT_HEADERS = 'PAYMENT-RESPONSE,X-PAYMENT-RESPONSE,Payment-Receipt';
+const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
+/** Grace before an authorization counts as expired, for clock skew between this host and the chain. */
+const CLOCK_SKEW_SECONDS = 60;
+const EIP3009_STATE_ABI = [
+  {
+    type: 'function',
+    name: 'authorizationState',
+    stateMutability: 'view',
+    inputs: [{ name: 'authorizer', type: 'address' }, { name: 'nonce', type: 'bytes32' }],
+    outputs: [{ type: 'bool' }],
+  },
+] as const;
+
+/** A signed payment that was sent: the response (or the error that replaced it) and the record to present it again. */
+interface Sent {
+  offer: PaymentOffer;
+  pending: PendingPayment;
+  second?: Response;
+  /** The response to hand back: `second`, or the one a redirect after payment led to. */
+  result?: Response;
+  error?: unknown;
+}
+
+/** What a response to a paid request says about the payment. */
+interface Inspection {
+  status: SettlementStatus;
+  reason: string;
+  receipt?: PaymentReceipt;
+  transaction?: `0x${string}`;
+  retryAfterMs?: number;
+  /** `false`: the seller delivered with an unsettled receipt, so presenting the payment again cannot succeed. */
+  replayable?: false;
+}
+
+/** The authorization inside an x402 payload (`exact` EIP-3009 or Permit2, `upto` Permit2), if its shape is known. */
+function authorizationOf(payload: unknown): SignedAuthorization | undefined {
+  const p = (payload ?? {}) as { authorization?: Record<string, unknown>; permit2Authorization?: Record<string, unknown> };
+  const a = p.authorization ?? p.permit2Authorization;
+  if (!a || typeof a.from !== 'string' || a.nonce === undefined) return undefined;
+  const validBefore = Number(p.authorization ? a.validBefore : a.deadline);
+  if (!Number.isFinite(validBefore)) return undefined;
+  return { kind: p.authorization ? 'eip3009' : 'permit2', from: a.from as Address, nonce: String(a.nonce), validBefore };
+}
+
+/** `Retry-After` as milliseconds: delay-seconds or an HTTP date. */
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) return undefined;
+  if (/^\d+$/.test(value.trim())) return Number(value.trim()) * 1000;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : undefined;
+}
+
+/** The `transaction` a `503 settlement_pending` body names, when its receipt header did not. */
+async function bodyTransaction(res: Response): Promise<`0x${string}` | undefined> {
+  try {
+    const body = (await res.clone().json()) as { transaction?: unknown };
+    return typeof body.transaction === 'string' && TX_HASH.test(body.transaction) ? (body.transaction as `0x${string}`) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** Wait `ms`, or until `signal` aborts (resolving, not rejecting). */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
 
 function sameOrigin(a: URL, b: URL): boolean {
   return a.protocol === b.protocol && a.host === b.host;
@@ -713,7 +987,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
    * nonce bound to the challenge (keccak256 of `[id, realm]`), valid until the challenge expires
    * (capped like x402's signing window).
    */
-  const mppCredential = async (offer: MppOffer): Promise<[string, string]> => {
+  const mppCredential = async (offer: MppOffer): Promise<[string, string, { from: Address; nonce: string; validBefore: string }]> => {
     const c = offer.challenge;
     const { asset, chainId } = offer.network;
     const now = Math.floor(Date.now() / 1000);
@@ -730,7 +1004,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
       message: { from, to, value: BigInt(offer.amount), validAfter: 0n, validBefore: BigInt(validBefore), nonce },
     } as Parameters<ClientEvmSigner['signTypedData']>[0]);
     const payload = { type: 'authorization' as const, from, to, value: offer.amount, validAfter: '0', validBefore: String(validBefore), nonce, signature };
-    return ['Authorization', serializeMppCredential(c, payload, mppSource(chainId, from))];
+    return ['Authorization', serializeMppCredential(c, payload, mppSource(chainId, from)), payload];
   };
 
   /**
@@ -800,7 +1074,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
   const decodeReceipt = (header: string, offer: X402Offer, response: Response): PaymentReceipt | undefined => {
     try {
       const decoded = decodePaymentReceipt(header, offer.network);
-      return validatePaymentReceipt(decoded, { scheme: offer.scheme, amount: offer.amount, network: offer.network, asset: offer.asset, payer: account.address });
+      return validatePaymentReceipt(decoded, { scheme: offer.scheme, amount: offer.amount, network: offer.network, asset: offer.asset, payer: account.address, classify });
     } catch (e) {
       if (e instanceof RadiusPaymentError && e.code === 'invalid_receipt') {
         const details: InvalidReceiptDetails = { ...(e.details as InvalidReceiptDetails), response };
@@ -841,15 +1115,20 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     );
   };
 
-  const paidFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  /**
+   * One payment: the unpaid request, the offer, the signed payment, and the paid request. Returns the
+   * first response when no payment was asked for. Once the payment is signed, nothing is thrown:
+   * a transport error comes back as `error`, next to the `PendingPayment` that can present it again.
+   */
+  const send = async (input: RequestInfo | URL, init: RequestInit | undefined): Promise<{ first: Response } | Sent> => {
     const request = new Request(input, init);
     if (request.headers.has('payment-signature') || request.headers.has('x-payment') || /^payment\s/i.test(request.headers.get('authorization') ?? '')) {
-      return baseFetch(request);
+      return { first: await baseFetch(request) };
     }
     // The paid retry never follows redirects: a 3xx must not carry the payment header to another origin.
     let retry = new Request(request.clone(), { redirect: 'manual' });
     const first = await baseFetch(request);
-    if (first.status !== 402) return first;
+    if (first.status !== 402) return { first };
     // fetch followed redirects before the 402. We pay at the URL that answered it, not the redirector,
     // and replay the ORIGINAL method and body there (leaving Authorization and Cookie behind on another
     // origin, as fetch does). This matches @x402/fetch and @x402/axios, whose paid retry is a copy of the
@@ -869,6 +1148,8 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     }
 
     const unpaid = new Headers(retry.headers); // what a redirect after payment may carry on: no payment headers
+    const paymentHeaders: Record<string, string> = {};
+    let authorization: SignedAuthorization | undefined;
     if (offer.protocol === 'x402') {
       const withheld = await ensureAllowance(offer, x402!.extensions as Record<string, unknown> | undefined);
       // Narrow the challenge to the chosen offer so the upstream selector cannot pick another, and
@@ -879,35 +1160,291 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
       // v2 servers match `accepted` against the requirement they sent (core fields equal, their `extra`
       // a subset of ours), so echo it untouched rather than the filled-in signing copy.
       if (payload.x402Version === 2) payload.accepted = offer.requirements as PaymentRequirements;
-      for (const [k, v] of Object.entries(httpClient.encodePaymentSignatureHeader(payload))) retry.headers.set(k, v);
+      Object.assign(paymentHeaders, httpClient.encodePaymentSignatureHeader(payload));
+      authorization = authorizationOf(payload.payload);
     } else {
-      const [name, value] = await mppCredential(offer);
-      retry.headers.set(name, value);
+      const [name, value, signed] = await mppCredential(offer);
+      paymentHeaders[name] = value;
+      authorization = { kind: 'eip3009', from: signed.from, nonce: signed.nonce, validBefore: Number(signed.validBefore) };
     }
-    retry.headers.set('Access-Control-Expose-Headers', 'PAYMENT-RESPONSE,X-PAYMENT-RESPONSE,Payment-Receipt');
+    for (const [k, v] of Object.entries(paymentHeaders)) retry.headers.set(k, v);
+    retry.headers.set('Access-Control-Expose-Headers', EXPOSED_RECEIPT_HEADERS);
 
-    const replay = retry.clone(); // the paid request consumes its body; a 307/308 or 301/302 follow-up may need it again
-    const second = await baseFetch(retry);
+    const now = Date.now();
+    // Always kept: `resume` re-sends it, whether the record came from `pay`, `onPaymentPending` or `details.pending`.
+    const body = retry.body ? new Uint8Array(await retry.clone().arrayBuffer()) : undefined;
+    const pending: PendingPayment = {
+      status: 'unknown',
+      reason: 'The paid request has not been answered',
+      offer,
+      request: { url: retry.url, method: retry.method, headers: [...unpaid], body },
+      paymentHeaders,
+      authorization,
+      attempts: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    try {
+      return { offer, pending, ...(await deliver(retry, unpaid)) };
+    } catch (error) {
+      return { offer, pending, error };
+    }
+  };
+
+  /**
+   * Send a paid request. A redirect after payment is followed without payment headers, and the
+   * receipt headers of the paid response are carried onto the final one. Throws only when the paid
+   * request itself gets no response.
+   */
+  const deliver = async (paid: Request, unpaid: Headers): Promise<{ second: Response; result?: Response; error?: unknown }> => {
+    const replay = paid.clone(); // the paid request consumes its body; a 307/308 or 301/302 follow-up may need it again
+    const second = await baseFetch(paid);
     const location = REDIRECT_STATUSES.has(second.status) ? second.headers.get('location') : null;
-    if (location) {
-      // The seller redirects after paying (say, to the content with a token); the receipt is on this response.
-      // Unlike the paid retry, this hop follows fetch's rules: 303 becomes a GET (HEAD stays HEAD), a 301/302
-      // POST becomes a GET, other methods are kept, and 307/308 repeat method and body. Never a payment header.
+    if (!location) return { second, result: second };
+    // The seller redirects after paying (say, to the content with a token); the receipt is on this response.
+    // Unlike the paid retry, this hop follows fetch's rules: 303 becomes a GET (HEAD stays HEAD), a 301/302
+    // POST becomes a GET, other methods are kept, and 307/308 repeat method and body. Never a payment header.
+    try {
       await second.body?.cancel();
-      const next = new URL(location, retry.url);
-      if (!sameOrigin(next, new URL(retry.url))) ['authorization', 'cookie'].forEach((h) => unpaid.delete(h));
-      const method = retry.method;
+      const headersOut = new Headers(unpaid);
+      const next = new URL(location, paid.url);
+      if (!sameOrigin(next, new URL(paid.url))) ['authorization', 'cookie'].forEach((h) => headersOut.delete(h));
+      const method = paid.method;
       const toGet = second.status === 303 ? method !== 'GET' && method !== 'HEAD' : (second.status === 301 || second.status === 302) && method === 'POST';
       const hasBody = !toGet && method !== 'GET' && method !== 'HEAD';
-      if (toGet) ['content-encoding', 'content-language', 'content-location', 'content-type'].forEach((h) => unpaid.delete(h));
+      if (toGet) ['content-encoding', 'content-language', 'content-location', 'content-type'].forEach((h) => headersOut.delete(h));
       const body = hasBody ? await replay.arrayBuffer() : undefined;
-      const followed = await baseFetch(new Request(next, { method: toGet ? 'GET' : method, headers: unpaid, body, signal: retry.signal }));
+      const followed = await baseFetch(new Request(next, { method: toGet ? 'GET' : method, headers: headersOut, body, signal: paid.signal }));
       const headers = new Headers(followed.headers);
       for (const h of ['payment-response', 'x-payment-response', MPP_RECEIPT_HEADER]) {
         const v = second.headers.get(h);
         if (v) headers.set(h, v);
       }
-      return settled(second, new Response(followed.body, { status: followed.status, statusText: followed.statusText, headers }), offer);
+      return { second, result: new Response(followed.body, { status: followed.status, statusText: followed.statusText, headers }) };
+    } catch (error) {
+      return { second, error };
+    }
+  };
+
+  /**
+   * Read what the response to a paid request says about the payment. The receipt decides when there
+   * is one; without one, a `402` is a rejection, a success is a delivery, a `5xx`, `408` or `429` is
+   * unknown, and another `4xx` is a refusal that settled nothing. Throws `invalid_receipt` like `payFetch`,
+   * with `content` (the response the caller gets: after a redirect, the followed one) in `details.response`.
+   */
+  const inspect = async (res: Response, offer: PaymentOffer, content: Response = res): Promise<Inspection> => {
+    const receipt = offer.protocol === 'x402' ? x402Receipt(res, offer, content) : mppReceipt(res, offer);
+    const retryAfterMs = parseRetryAfter(res.headers.get('retry-after'));
+    let status: SettlementStatus;
+    let reason: string;
+    if (receipt) {
+      status = receipt.success ? 'settled' : receipt.charge?.evidence === 'pending' ? 'pending' : classify(receipt);
+      reason = receipt.success
+        ? `The seller reports settlement${receipt.transaction ? ` in ${receipt.transaction}` : ''}`
+        : `${status === 'pending' ? 'The seller reports a pending settlement' : status === 'rejected' ? 'The seller rejected the payment' : 'The seller reports a failed settlement'}: ${receipt.errorMessage ?? receipt.errorReason ?? 'no reason given'}`;
+    } else if (res.status === 402) {
+      status = 'rejected';
+      reason = 'The seller rejected the payment (402)';
+    } else if (res.status < 400) {
+      status = 'settled';
+      reason = `The seller answered ${res.status} without a receipt`;
+    } else if (res.status >= 500 || res.status === 408 || res.status === 429) {
+      status = 'unknown';
+      reason = `The seller answered ${res.status} without a receipt`;
+    } else {
+      status = 'rejected';
+      reason = `The seller answered ${res.status} without a receipt; nothing was settled`;
+    }
+    let transaction = receipt?.transaction && TX_HASH.test(receipt.transaction) ? (receipt.transaction as `0x${string}`) : undefined;
+    if (!transaction && res.status === 503) transaction = await bodyTransaction(res);
+    // A success with an unsettled receipt: the seller settled after delivering (x402 `settle: 'after'`).
+    const replayable = receipt && !receipt.success && (status === 'pending' || status === 'unknown') && res.status < 400 ? false : undefined;
+    return { status, reason, receipt, transaction, retryAfterMs, replayable };
+  };
+
+  /** A pending payment updated with what an attempt learned. */
+  const unsettled = (pending: PendingPayment, status: 'pending' | 'unknown', reason: string, learned: Partial<Pick<PendingPayment, 'transaction' | 'receipt' | 'retryAfterMs' | 'replayable'>> = {}): PendingPayment => ({
+    ...pending,
+    status,
+    reason,
+    transaction: learned.transaction ?? pending.transaction,
+    receipt: learned.receipt ?? pending.receipt,
+    retryAfterMs: learned.retryAfterMs,
+    ...((learned.replayable ?? pending.replayable) === false ? { replayable: false } : {}),
+    updatedAt: Date.now(),
+  });
+
+  /** Outcomes `resume` must not retry: re-presenting the payment cannot change them. */
+  const final = new WeakSet<object>();
+
+  /**
+   * Turn the response to one presentation of a payment into an outcome. `resumed` is true when an
+   * earlier presentation's outcome was uncertain, so a refusal is no longer proof that nothing moved.
+   */
+  const finish = async (pending: PendingPayment, sent: { second?: Response; result?: Response; error?: unknown }, ctx: { resumed: boolean; client?: PublicClient }): Promise<PaymentOutcome> => {
+    const { offer } = pending;
+    const attempts = pending.attempts;
+    const second = sent.second;
+    if (!second) {
+      const reason = `The paid request got no response: ${errorMessage(sent.error)}`;
+      return { status: 'unknown', offer, attempts, pending: unsettled(pending, 'unknown', reason), reason, error: sent.error };
+    }
+    let seen: Inspection;
+    try {
+      seen = await inspect(second, offer, sent.result ?? second);
+    } catch (error) {
+      const reason = `The seller's receipt could not be trusted: ${errorMessage(error)}`;
+      return { status: 'unknown', offer, attempts, pending: unsettled(pending, 'unknown', reason), reason, response: sent.result ?? second, error };
+    }
+    const { receipt } = seen;
+    switch (seen.status) {
+      case 'settled': {
+        const result = sent.result ?? second;
+        const outcome: SettledPayment = {
+          status: 'settled', offer, attempts, receipt, response: result,
+          delivered: sent.error === undefined && result.status < 400,
+          evidence: receipt ? 'receipt' : 'delivery',
+        };
+        if (receipt) await reportPaid(receipt, offer);
+        return outcome;
+      }
+      case 'pending':
+      case 'unknown': {
+        const next = unsettled(pending, seen.status, seen.reason, seen);
+        if (next.replayable !== false) return { status: seen.status, offer, attempts, pending: next, reason: seen.reason, response: second, error: sent.error };
+        // Delivered with an unsettled receipt: keep the resource; only the chain can settle the question now.
+        const result = sent.result ?? second;
+        return { status: seen.status, offer, attempts, pending: next, reason: seen.reason, response: result, error: sent.error, delivered: sent.error === undefined && result.status < 400 };
+      }
+      case 'failed': {
+        const transaction = seen.transaction ?? pending.transaction;
+        if (!transaction) return { status: 'failed', offer, attempts, reason: seen.reason, response: second, receipt };
+        // A reported failure is the facilitator's word; the chain decides whether anything moved.
+        const reconciliation = await reconcileTransaction(pending, transaction, ctx.client);
+        if (reconciliation.status === 'confirmed') {
+          return { status: 'settled', offer, attempts, delivered: false, evidence: 'chain', response: second, receipt, reconciliation };
+        }
+        if (reconciliation.status === 'reverted' || reconciliation.status === 'mismatch') {
+          return { status: 'failed', offer, attempts, reason: `${seen.reason}. ${reconciliation.message}`, response: second, receipt, reconciliation };
+        }
+        const reason = `${seen.reason}, but the chain does not show transaction ${transaction} yet: ${reconciliation.message}`;
+        return { status: 'unknown', offer, attempts, pending: unsettled(pending, 'unknown', reason, { transaction, receipt }), reason, response: second };
+      }
+      default: {
+        // rejected, or a status a custom classifier added
+        let challenge: PaymentRequired | undefined;
+        if (offer.protocol === 'x402' && second.status === 402) {
+          try {
+            challenge = httpClient.getPaymentRequiredResponse((n) => second.headers.get(n));
+          } catch {
+            /* no decodable challenge */
+          }
+        }
+        const reason = challenge?.error ? `${seen.reason}: ${challenge.error}` : seen.reason;
+        if (!ctx.resumed) return { status: 'rejected', offer, attempts, reason, response: second, receipt, challenge };
+        return afterRefusal(pending, reason, second, ctx.client);
+      }
+    }
+  };
+
+  /**
+   * The seller refused a payment whose earlier outcome was uncertain. The first presentation may have
+   * settled it (a consumed authorization is refused the second time), so ask the chain: the named
+   * transaction, else the authorization's nonce. Ends `resume` whatever it finds.
+   */
+  const afterRefusal = async (pending: PendingPayment, reason: string, response: Response | undefined, client?: PublicClient): Promise<PaymentOutcome> => {
+    const outcome = await fromChain(pending, reason, response, client, false);
+    final.add(outcome);
+    return outcome;
+  };
+
+  /**
+   * What the chain says about a payment: the named transaction, else the authorization's nonce.
+   * `unknown` while the authorization is unused and still valid (or the chain cannot be read).
+   * `delivered` is what a `settled` answer reports (the seller already sent the resource, or not).
+   */
+  const fromChain = async (pending: PendingPayment, reason: string, response: Response | undefined, client: PublicClient | undefined, delivered: boolean): Promise<PaymentOutcome> => {
+    const { offer, attempts } = pending;
+    if (pending.transaction) {
+      const reconciliation = await reconcileTransaction(pending, pending.transaction, client);
+      if (reconciliation.status === 'confirmed') return { status: 'settled', offer, attempts, delivered, evidence: 'chain', response, receipt: pending.receipt, reconciliation };
+      if (reconciliation.status === 'reverted' || reconciliation.status === 'mismatch') {
+        return { status: 'failed', offer, attempts, reason: `${reason}. ${reconciliation.message}`, response, reconciliation };
+      }
+    }
+    const state = await authorizationState(pending, client);
+    if (state.used === true) {
+      // The authorization was consumed (unless the payer cancelled it): the payment settled. Undelivered: ask the seller to deliver.
+      return { status: 'settled', offer, attempts, delivered, evidence: 'authorization', response, receipt: pending.receipt };
+    }
+    if (state.used === false && state.expired) {
+      return { status: 'failed', offer, attempts, reason: `${reason}. The authorization expired unused, so it can no longer settle; a new payment is safe`, response };
+    }
+    const why =
+      state.used === false
+        ? `${reason}. Its authorization is unused but valid until ${new Date(state.validBefore * 1000).toISOString()}, so the earlier attempt could still settle; resume after that to get a final answer`
+        : `${reason}. The chain could not be checked: ${state.error ?? 'the payment carries no readable authorization'}`;
+    return { status: 'unknown', offer, attempts, pending: unsettled(pending, 'unknown', why), reason: why, response };
+  };
+
+  /** Check a transaction a seller or facilitator named for this payment against the chain. */
+  const reconcileTransaction = (pending: PendingPayment, transaction: `0x${string}`, client?: PublicClient): Promise<PaymentReconciliation> => {
+    const { offer } = pending;
+    const receipt: PaymentReceipt = {
+      success: false,
+      protocol: offer.protocol,
+      transaction,
+      network: offer.network.network,
+      payer: account.address,
+      errorReason: SETTLEMENT_PENDING_REASON,
+    };
+    return reconcilePayment(receipt, offer, { payer: account.address, client: client ?? railFor(offer.network)?.publicClient });
+  };
+
+  /** Whether the payment's authorization was used on chain, and whether it has expired. */
+  const authorizationState = async (pending: PendingPayment, client?: PublicClient): Promise<{ used?: boolean; expired: boolean; validBefore: number; error?: string }> => {
+    const auth = pending.authorization;
+    if (!auth) return { expired: false, validBefore: 0 };
+    const expired = Date.now() / 1000 >= auth.validBefore + CLOCK_SKEW_SECONDS;
+    const pc = client ?? railFor(pending.offer.network)?.publicClient;
+    if (!pc) return { expired, validBefore: auth.validBefore, error: `${pending.offer.network.name} is not one of this client's networks` };
+    try {
+      const used =
+        auth.kind === 'eip3009'
+          ? ((await pc.readContract({ address: pending.offer.asset, abi: EIP3009_STATE_ABI, functionName: 'authorizationState', args: [auth.from, auth.nonce as `0x${string}`] })) as boolean)
+          : await isPermit2NonceUsed(pc as never, { owner: auth.from, nonce: BigInt(auth.nonce) });
+      return { used, expired, validBefore: auth.validBefore };
+    } catch (e) {
+      return { expired, validBefore: auth.validBefore, error: errorMessage(e) };
+    }
+  };
+
+  const reportPaid = async (receipt: PaymentReceipt, offer: PaymentOffer): Promise<void> => {
+    if (!options.onPaid) return;
+    try {
+      await options.onPaid(receipt, offer);
+    } catch (e) {
+      console.error('radius-sdk onPaid hook failed:', e);
+    }
+  };
+
+  const reportPending = async (pending: PendingPayment): Promise<void> => {
+    if (!options.onPaymentPending) return;
+    try {
+      await options.onPaymentPending(pending);
+    } catch (e) {
+      console.error('radius-sdk onPaymentPending hook failed:', e);
+    }
+  };
+
+  const paidFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const sent = await send(input, init);
+    if ('first' in sent) return sent.first;
+    const { offer, second } = sent;
+    if (!second) {
+      // The paid request got no response: the payment may have settled. Hand the record over, then fail as fetch does.
+      await reportPending(unsettled(sent.pending, 'unknown', `The paid request got no response: ${errorMessage(sent.error)}`));
+      throw sent.error;
     }
     if (second.status === 402) {
       // `details.response` is the server's answer, left unread for the caller to inspect; the reason
@@ -925,31 +1462,116 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
       } catch {
         /* no decodable reason */
       }
-      const details: PaymentRejectedDetails = { response: second, error, challenge };
-      throw new RadiusPaymentError('payment_rejected', `Server rejected the payment (${error ?? 'no reason given'})`, details);
+      // x402 core (and so upstream adapters) answers a pending settlement with a 402 too: keep that payment resumable.
+      let pending: PendingPayment | undefined;
+      try {
+        const seen = await inspect(second, offer);
+        if (seen.status === 'pending' || seen.status === 'unknown') pending = unsettled(sent.pending, seen.status, seen.reason, seen);
+      } catch {
+        /* an untrusted receipt on a rejection changes nothing */
+      }
+      if (pending) await reportPending(pending);
+      const details: PaymentRejectedDetails = { response: second, error, challenge, pending };
+      const message = pending
+        ? `Server reports the payment's settlement as ${pending.status} (${error ?? pending.reason}); resume it with payFetch.resume(error.details.pending) rather than paying again`
+        : `Server rejected the payment (${error ?? 'no reason given'})`;
+      throw new RadiusPaymentError('payment_rejected', message, details);
     }
-    return settled(second, second, offer);
+    if (sent.error !== undefined) throw sent.error; // the redirect after payment failed
+    const seen = await inspect(second, offer, sent.result ?? second); // throws invalid_receipt, as before
+    if (seen.receipt) await reportPaid(seen.receipt, offer);
+    if (seen.status === 'pending' || seen.status === 'unknown') await reportPending(unsettled(sent.pending, seen.status, seen.reason, seen));
+    return sent.result ?? second;
   };
 
-  /**
-   * Report the receipt carried by `paid` (the response to the paid request) and return `result` to the
-   * caller. After a redirect `paid` is the spent 3xx and `result` the followed response with the paid
-   * content, so an `invalid_receipt` error carries `result` (unread) in `details.response`.
-   */
-  const settled = async (paid: Response, result: Response, offer: PaymentOffer): Promise<Response> => {
-    const receipt = offer.protocol === 'x402' ? x402Receipt(paid, offer, result) : mppReceipt(paid, offer);
-    if (receipt && options.onPaid) {
-      try {
-        await options.onPaid(receipt, offer);
-      } catch (e) {
-        console.error('radius-sdk onPaid hook failed:', e);
-      }
-    }
-    return result;
+  const pay = async (input: RequestInfo | URL, init?: RequestInit, payOptions: PayOptions = {}): Promise<PaymentOutcome> => {
+    const sent = await send(input, init);
+    if ('first' in sent) return { status: 'not_required', response: sent.first };
+    const outcome = await finish(sent.pending, sent, { resumed: false, client: payOptions.client });
+    if (outcome.status === 'pending' || outcome.status === 'unknown') await reportPending(outcome.pending);
+    return outcome;
   };
+
+  const resume = async (start: PendingPayment, resumeOptions: ResumeOptions = {}): Promise<PaymentOutcome> => {
+    const maxAttempts = resumeOptions.maxAttempts ?? 5;
+    const initialDelayMs = resumeOptions.initialDelayMs ?? 1000;
+    const maxDelayMs = resumeOptions.maxDelayMs ?? 30_000;
+    const factor = resumeOptions.backoffFactor ?? 2;
+    const attemptTimeoutMs = resumeOptions.attemptTimeoutMs ?? 30_000;
+    for (const [name, v] of Object.entries({ maxAttempts, initialDelayMs, maxDelayMs, backoffFactor: factor, attemptTimeoutMs })) {
+      if (!Number.isFinite(v) || v < 0) throw new RadiusPaymentError('config', `resume: ${name} must be a non-negative number`);
+    }
+    if (!start || (start.status !== 'pending' && start.status !== 'unknown') || Object.keys(start.paymentHeaders ?? {}).length === 0) {
+      throw new RadiusPaymentError('config', 'resume: pass the PendingPayment of a pending or unknown outcome');
+    }
+    const rail = railFor(start.offer.network);
+    if (!rail) throw new RadiusPaymentError('config', `resume: ${start.offer.network.name} is not one of this client's networks`);
+    const { signal, client: readClient } = resumeOptions;
+    const { offer } = start;
+
+    let pending = start;
+    let last: UnsettledPayment = { status: start.status, offer, attempts: start.attempts, pending, reason: start.reason };
+    const stopped = (): UnsettledPayment => ({ ...last, aborted: true });
+    for (let i = 0; i < maxAttempts; i++) {
+      const delay = Math.min(maxDelayMs, Math.max(initialDelayMs * factor ** i, pending.retryAfterMs ?? 0));
+      await sleep(Math.max(0, pending.updatedAt + delay - Date.now()), signal);
+      if (signal?.aborted) return stopped();
+
+      // A named settlement transaction that reverted is final; re-presenting cannot change it.
+      if (pending.transaction) {
+        const reconciliation = await reconcileTransaction(pending, pending.transaction, readClient);
+        if (reconciliation.status === 'reverted') {
+          return { status: 'failed', offer, attempts: pending.attempts, reason: reconciliation.message, receipt: pending.receipt, reconciliation };
+        }
+      }
+
+      // Delivered with an unsettled receipt (x402 `settle: 'after'`): the seller verifies a payment before
+      // its handler, and a used authorization fails that, so presenting it again cannot succeed. Ask the chain.
+      if (pending.replayable === false) {
+        const outcome = await fromChain(pending, pending.reason, undefined, readClient, true);
+        if (outcome.status !== 'unknown') return outcome;
+        pending = { ...outcome.pending, status: pending.status, updatedAt: Date.now() };
+        last = { ...outcome, status: pending.status, pending, delivered: true };
+        continue;
+      }
+
+      // Present the same payment: the original request with the original payment headers. Nothing is signed.
+      const headers = new Headers(pending.request.headers);
+      for (const [k, v] of Object.entries(pending.paymentHeaders)) headers.set(k, v);
+      headers.set('Access-Control-Expose-Headers', EXPOSED_RECEIPT_HEADERS);
+      const attemptSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(attemptTimeoutMs)]) : AbortSignal.timeout(attemptTimeoutMs);
+      const paid = new Request(pending.request.url, { method: pending.request.method, headers, body: pending.request.body as BodyInit | undefined, redirect: 'manual', signal: attemptSignal });
+      pending = { ...pending, attempts: pending.attempts + 1, updatedAt: Date.now() };
+      let sent: { second?: Response; result?: Response; error?: unknown };
+      try {
+        sent = await deliver(paid, new Headers(pending.request.headers));
+      } catch (error) {
+        if (signal?.aborted) return { ...stopped(), pending: unsettled(pending, last.status, last.reason), attempts: pending.attempts };
+        sent = { error };
+      }
+      const outcome = await finish(pending, sent, { resumed: true, client: readClient });
+      if ((outcome.status === 'pending' || outcome.status === 'unknown') && !final.has(outcome)) {
+        last = outcome;
+        pending = outcome.pending;
+        if (signal?.aborted) return stopped();
+        continue;
+      }
+      if (outcome.status === 'pending' || outcome.status === 'unknown') await reportPending(outcome.pending);
+      return outcome;
+    }
+    // Out of attempts. An authorization past its deadline has a final answer on chain.
+    if (pending.replayable !== false && pending.authorization && Date.now() / 1000 >= pending.authorization.validBefore + CLOCK_SKEW_SECONDS) {
+      const resolved = await afterRefusal(pending, last.reason, last.response, readClient);
+      if (resolved.status !== 'unknown') return resolved;
+    }
+    await reportPending(last.pending);
+    return last;
+  };
+
+  const classify: SettlementClassifier = options.classifySettlement ?? classifySettlement;
 
   /** The receipt on `res`; a failed check reports `content` (the response the caller gets) as `details.response`. */
-  const x402Receipt = (res: Response, offer: X402Offer, content: Response): PaymentReceipt | undefined => {
+  const x402Receipt = (res: Response, offer: X402Offer, content: Response = res): PaymentReceipt | undefined => {
     const header = res.headers.get('payment-response') ?? res.headers.get('x-payment-response');
     return header ? decodeReceipt(header, offer, content) : undefined;
   };
@@ -991,6 +1613,8 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     client,
     reconcilePayment: (receipt: PaymentReceipt, offer: ReconcileOffer, opts: ReconcileOptions = {}) =>
       reconcilePayment(receipt, offer, { payer: account.address, client: railFor(offer.network)?.publicClient, ...opts }),
+    pay,
+    resume,
   });
 }
 
@@ -1086,5 +1710,7 @@ export { getPaymentReceipt, decodePaymentReceipt, decodeMppReceipt, parseUptoSet
 export type { MppChallenge } from '../mpp.js';
 export type { PaymentReceipt, PaymentCharge, ChargeEvidence, ReceiptExpectation, InvalidReceiptReason, InvalidReceiptDetails } from '../receipt.js';
 export { RadiusPaymentError } from '../errors.js';
+export { SETTLEMENT_PENDING_REASON, SETTLEMENT_UNKNOWN_REASON, classifySettlement, isTerminalSettlement } from '../outcome.js';
+export type { SettlementStatus, SettlementClassifier, SettleResponseLike } from '../outcome.js';
 export { radiusEnv } from '../env.js';
 export type { RadiusEnvConfig } from '../env.js';
