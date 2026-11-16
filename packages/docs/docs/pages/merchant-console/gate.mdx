@@ -1,0 +1,276 @@
+---
+title: Set up a gate
+description: Connect a Cloudflare Worker or radius-gateway to a Merchant Console project with its connector key, so every request is allowed, denied, rate-limited or charged by your policy.
+---
+
+# Set up a gate [Enforce your policy in front of your API]
+
+A gate is the code in front of your API that decides each request. It fetches your project's policy from Radius, keeps a copy, and allows, denies, rate-limits or charges each request over [x402](/build/x402). Requests never pass through Radius: agents call your API at your own domain, and your gate answers them.
+
+Radius ships two gates. Choose by where your API runs.
+
+| Your API runs on     | Gate                                             |
+| -------------------- | ------------------------------------------------ |
+| Cloudflare Workers   | `@radiustech/platform-sdk`, added to your Worker |
+| Your own server      | `radius-gateway`, a Docker container             |
+| A Kubernetes cluster | `radius-gateway`, as a Deployment                |
+
+The project's **Gate** page in the Merchant Console shows the same steps with your project's IDs filled in.
+
+## Generate the connector key
+
+Each project has one connector key. It reads that project's policy and nothing else: it can't change anything or reach another project.
+
+1. Open the project, then **Gate**.
+2. Select **Generate key**.
+3. Copy the key from the dialog. The console shows it once.
+
+Generating, replacing and revoking a key needs the `connector-keys:write` permission, which organization admins have.
+
+:::warning[Keep the key out of chats and source control]
+Store the connector key as a secret in your gate's runtime. The Radius platform MCP server has no tool that returns it, so an agent never needs to see it.
+:::
+
+## Cloudflare Worker
+
+These steps work with `@radiustech/platform-sdk` 0.2.0 or later. Two things differ before 0.3.0, and the notes below mark them.
+
+### 1. Install the SDK
+
+```bash
+pnpm add @radiustech/platform-sdk
+```
+
+### 2. Wrap your Worker
+
+`withRadius()` checks every request against the project's policy before your handler runs. `RadiusCounter` counts rate limits and free quotas.
+
+```ts
+// src/index.ts
+import { withRadius } from '@radiustech/platform-sdk';
+export { RadiusCounter } from '@radiustech/platform-sdk/limiters/do';
+
+export default withRadius({
+  async fetch(request, env, ctx) {
+    return new Response('hello from a paid endpoint');
+  },
+});
+```
+
+A Hono app uses the `radiusPolicy()` middleware and exports `scheduled()` itself, so the policy still syncs:
+
+```ts
+// src/index.ts
+import { radiusPolicy, syncPolicy } from '@radiustech/platform-sdk';
+import { Hono } from 'hono';
+
+export { RadiusCounter } from '@radiustech/platform-sdk/limiters/do';
+
+const app = new Hono<{ Bindings: Env }>();
+app.use('*', radiusPolicy());
+app.get('/hello', (c) => c.json({ message: 'hello from a paid endpoint' }));
+
+export default {
+  fetch: app.fetch,
+  scheduled: (_controller, env, ctx) => ctx.waitUntil(syncPolicy(env)),
+} satisfies ExportedHandler<Env>;
+```
+
+### 3. Create the policy store
+
+A KV namespace holds the synced policy. The command prints the ID for the next step.
+
+```bash
+pnpm wrangler kv namespace create RADIUS_POLICY
+```
+
+### 4. Point the Worker at your project
+
+Add these lines to `wrangler.toml`. Replace the project ID with yours and `<kv-id>` with the ID from step 3.
+
+```toml
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+RADIUS_PROJECT_ID = "<project-id>"
+
+[[kv_namespaces]]
+binding = "RADIUS_POLICY"
+id = "<kv-id>"
+
+[[durable_objects.bindings]]
+name = "RADIUS_LIMITER"
+class_name = "RadiusCounter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RadiusCounter"]
+```
+
+### 5. Add the connector key and deploy
+
+Paste the connector key when wrangler asks.
+
+```bash
+pnpm wrangler secret put RADIUS_API_KEY
+pnpm wrangler deploy
+```
+
+### 6. Check it
+
+Call an endpoint the project charges for, without paying:
+
+```bash
+curl -i https://api.example.com/your/charged/path
+```
+
+Expect `402 Payment Required` with the price. The status at the top of the **Gate** page turns to connected within a minute.
+
+### Worker settings
+
+The SDK finds everything by name, so there is no configuration object unless you want one.
+
+| Name                     | Kind           | What it is                                                                | Needed                                       |
+| ------------------------ | -------------- | ------------------------------------------------------------------------- | -------------------------------------------- |
+| `RADIUS_API_KEY`         | Secret         | The project's connector key                                               | To sync the policy                           |
+| `RADIUS_PROJECT_ID`      | Variable       | The project whose policy the Worker enforces                              | Always                                       |
+| `RADIUS_POLICY`          | KV namespace   | Holds the synced policy and `pricing.md`                                  | Always                                       |
+| `RADIUS_LIMITER`         | Durable Object | The `RadiusCounter` class, which counts rate limits and free quotas       | When a rule has a rate limit or a free quota |
+| `RADIUS_PUBLIC_URL`      | Variable       | The URL buyers call, when a proxy in front of the Worker changes the host | Behind a proxy                               |
+| `RADIUS_ORGANIZATION_ID` | Variable       | The project's organization. The SDK resolves it from the key when unset   | No                                           |
+
+`RADIUS_LIMITER` depends on the SDK version:
+
+- **0.3.0 or later.** Charging doesn't need it. The SDK keeps no record of payments and relies on the facilitator to settle each payment at most once. Keep the binding anyway: it also keeps overlapping policy syncs in order.
+- **0.2.0.** `RadiusCounter` also records payment claims, so a Worker that charges needs the binding even when no rule has a limit.
+
+:::warning[Replacing an existing paywall]
+Until its first policy loads, a Worker allows every request. Pass `noPolicy: 'deny'` to `withRadius()` or `radiusPolicy()` when the Worker replaces a paywall: it then answers `503 policy_unavailable` instead of serving paid routes free.
+:::
+
+## radius-gateway on Docker
+
+`radius-gateway` is a reverse proxy that runs in front of your API on your own server, behind your nginx or Caddy.
+
+### 1. Save your settings
+
+Create `.env` on the server that runs your API. The **Gate** page fills in the IDs.
+
+```bash
+UPSTREAM=http://host.docker.internal:3000
+PLATFORM_API_KEY=<connector-key>
+ORGANIZATION_ID=<organization-id>
+PROJECT_ID=<project-id>
+PUBLIC_URL=https://api.example.com
+```
+
+`UPSTREAM` is your API as the container sees it, so your API has to accept connections from beyond `127.0.0.1`.
+
+### 2. Run the image
+
+The gateway listens on port 8080 and answers health checks on port 9901, both on this machine only.
+
+```bash
+docker run -d --name radius-gateway \
+  --restart unless-stopped --env-file .env \
+  --add-host host.docker.internal:host-gateway \
+  -p 127.0.0.1:8080:8080 -p 127.0.0.1:9901:9901 \
+  ghcr.io/radiustechsystems/radius-gateway:main
+```
+
+### 3. Check that it loaded your policy
+
+```bash
+curl 127.0.0.1:9901/readyz
+```
+
+Expect `ready`. The readiness check answers once the gateway has fetched the policy.
+
+### 4. Send your traffic through it
+
+Proxy to the gateway instead of your API, and pass each caller's address. In nginx, change your site's server block:
+
+```diff
+ location / {
+-  proxy_pass http://127.0.0.1:3000;
++  proxy_pass http://127.0.0.1:8080;
++  proxy_set_header Host $host;
++  proxy_set_header X-Real-IP $remote_addr;
+ }
+```
+
+In a Caddyfile, change your site's block:
+
+```diff
+ api.example.com {
+-  reverse_proxy 127.0.0.1:3000
++  reverse_proxy 127.0.0.1:8080 {
++    header_up X-Real-IP {remote_host}
++  }
+ }
+```
+
+Then set the project's client IP to the `X-Real-IP` header: open the project's **Settings** and find **Client IP address** in the **Defaults** card. Rate limits and free quotas then count each caller, not your proxy.
+
+### 5. Check it
+
+Call a charged endpoint without paying, as in the [Worker check](#6-check-it). The **Gate** page turns to connected within 30 seconds.
+
+## radius-gateway on Kubernetes
+
+Run the same image as a Deployment in front of your API's Service.
+
+1. **Store the connector key as a Secret** named `radius-gateway`, with the key `PLATFORM_API_KEY`, in the namespace your API runs in.
+
+   ```bash
+   kubectl create secret generic radius-gateway \
+     --from-literal=PLATFORM_API_KEY='<connector-key>'
+   ```
+
+2. **Deploy the gateway.** Copy `radius-gateway.yaml` from the **Gate** page, set `UPSTREAM` to your API's Service, and apply it.
+
+   ```bash
+   kubectl apply -f radius-gateway.yaml
+   kubectl rollout status deployment/radius-gateway
+   ```
+
+   The pod is ready once it has fetched the policy, so the rollout finishes only then.
+
+3. **Point your Ingress at the `radius-gateway` Service** on port 8080 instead of your API's Service.
+
+4. **Set the project's client IP**, in the **Defaults** card of the project's **Settings**, to the header your ingress controller puts the caller's address in. ingress-nginx sets `X-Real-IP`.
+
+## Read the gate status
+
+The **Gate** page and the project overview show whether a gate is fetching the policy.
+
+| Status         | What it means                                                      |
+| -------------- | ------------------------------------------------------------------ |
+| Gate connected | A gate fetched the current policy version in the last 10 minutes   |
+| Behind         | A gate is connected but holds an older policy version              |
+| Upgrade needed | The gate's version is older than the minimum the platform supports |
+| No gate seen   | No gate has fetched this policy yet                                |
+
+The status names the gate and its version, for example `platform-sdk 0.3.0` or `radius-gateway 0.1.0`. The SDK identifies itself from 0.3.0. On 0.2.0 it still connects, and the status names it as an unidentified gate. An agent reads the same status with the `get_gate_status` tool; see [manage with an agent](/merchant-console/agents).
+
+## Replace or revoke the key
+
+A project has one current key. **Replace key** creates a new one and asks what happens to the old one:
+
+| Choice                     | Use it when                                                |
+| -------------------------- | ---------------------------------------------------------- |
+| Keeps working for 24 hours | A gate is running. Deploy the new key; the old one expires |
+| Keeps working for 7 days   | The deploy has to wait for a release window                |
+| Is revoked now             | The key is lost or leaked                                  |
+
+A gate whose key is revoked is refused within seconds. It stops fetching the policy and keeps enforcing the last version it fetched, so policy changes don't reach it until it has a new key.
+
+:::note[Organization API keys still work]
+A gate set up with an organization API key that has the `endpoints:read` permission keeps working. Use a connector key for new gates: it is scoped to one project and can only read.
+:::
+
+## Next steps
+
+- [Write the policy](/merchant-console/policy) your gate enforces.
+- [Publish `pricing.md`](/merchant-console/pricing-md) so agents can read your prices before they call.
