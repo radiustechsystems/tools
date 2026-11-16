@@ -38,7 +38,18 @@ const DISCOVER_SIDEBAR: SidebarItem[] = [
   { text: 'Overview', link: '/' },
   { text: 'Why Radius', link: '/why-radius' },
   { text: 'Try Radius', link: '/try' },
-  { text: 'Merchant Console', link: '/merchant-console' },
+  {
+    text: 'Merchant Console',
+    collapsed: false,
+    items: [
+      { text: 'Overview', link: '/merchant-console' },
+      { text: 'Set up a gate', link: '/merchant-console/gate' },
+      { text: 'Write the policy', link: '/merchant-console/policy' },
+      { text: 'Publish pricing.md', link: '/merchant-console/pricing-md' },
+      { text: 'Payments and wallets', link: '/merchant-console/payments' },
+      { text: 'Manage with an agent', link: '/merchant-console/agents' },
+    ],
+  },
   {
     text: 'Architecture',
     collapsed: false,
@@ -352,6 +363,7 @@ function headImpl(path: string, context: HeadContext, data: HeadData): HeadResul
   // Vocs renders <Head> twice per page: once in the document root (no page
   // frontmatter) and once inside the page layout (with frontmatter). Emit the
   // structured data only in the latter so each JSON-LD block appears once.
+  // (The PostHog loader is not rendered here: scripts/postbuild-analytics.ts injects it outside React.)
   if (!context.frontmatter) return base;
 
   const publisher = { '@type': 'Organization', name: 'Radius', url: 'https://radiustech.xyz' };

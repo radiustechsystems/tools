@@ -52,8 +52,8 @@ importers:
   packages/docs:
     dependencies:
       '@radiustech/platform-sdk':
-        specifier: ^0.1.0
-        version: 0.1.0(@cloudflare/workers-types@5.20261013.1)
+        specifier: ^0.2.0
+        version: 0.2.0(@cloudflare/workers-types@5.20261013.1)
       '@x402/core':
         specifier: 2.29.0
         version: 2.29.0
@@ -1912,8 +1912,8 @@ packages:
   '@poppinss/exception@1.2.3':
     resolution: {integrity: sha512-dCED+QRChTVatE9ibtoaxc+WkdzOSjYTKi/+uacHWIsfodVfpsueo3+DKpgU5Px8qXjgmXkSvhXvSCz3fnP9lw==}
 
-  '@radiustech/platform-sdk@0.1.0':
-    resolution: {integrity: sha512-oryWbW26a+YfwGS0O+4CL5ru/HV+JXxlpXHYVnrxQe4vmOJ+DWj0j+CsM5gJIwDNN3DlVVH+7GYGGhfl4sQtPA==}
+  '@radiustech/platform-sdk@0.2.0':
+    resolution: {integrity: sha512-SskMrfrkxTAisrvqKNJzN9PSKVwmlsiP5LWi9vOl+4djG+SkvyE4mA7lviGfiz6zA4JrUT0mMlofgThvCKOlVw==}
     peerDependencies:
       '@cloudflare/workers-types': '>=4.20240405.0'
     peerDependenciesMeta:
@@ -8286,7 +8286,7 @@ snapshots:
 
   '@poppinss/exception@1.2.3': {}
 
-  '@radiustech/platform-sdk@0.1.0(@cloudflare/workers-types@5.20261013.1)':
+  '@radiustech/platform-sdk@0.2.0(@cloudflare/workers-types@5.20261013.1)':
     dependencies:
       '@x402/core': 2.29.0
     optionalDependencies:
