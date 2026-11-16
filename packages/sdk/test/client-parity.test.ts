@@ -694,6 +694,25 @@ describe('a 402 behind a redirect', () => {
     expect([followUp.url, followUp.headers['payment-signature'], followUp.headers['x-api-key']]).toEqual(['/content?token=abc', undefined, 'k']);
   });
 
+  it('puts the followed response, body unread, in details.response when a receipt after a redirect fails validation', async () => {
+    const target = await serve((_req, res) => void res.writeHead(200).end('paid content'));
+    const bad = b64({ success: true, transaction: TX, network: NETWORK_ID, payer: PAY_TO }); // not the signer
+    const shop = await serve(async (req, res) => {
+      if (req.headers['payment-signature']) return void res.writeHead(303, { location: `${target.origin}/content?token=abc`, 'PAYMENT-RESPONSE': bad }).end();
+      res.writeHead(402, { 'PAYMENT-REQUIRED': b64(v2(EXACT_EIP3009)) }).end();
+    });
+    const paid: PaymentReceipt[] = [];
+    const error = await payer({ onPaid: (r) => void paid.push(r) })(`${shop.origin}/pay`, { method: 'POST', body: '{"a":1}' }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(RadiusPaymentError);
+    expect((error as RadiusPaymentError).code).toBe('invalid_receipt');
+    const details = (error as RadiusPaymentError).details as InvalidReceiptDetails;
+    expect(details.reason).toBe('payer_mismatch');
+    expect([details.response!.status, details.response!.bodyUsed]).toEqual([200, false]);
+    expect(await details.response!.text()).toBe('paid content');
+    expect(target.seen.map((r) => [r.method, r.url])).toEqual([['GET', '/content?token=abc']]);
+    expect(paid).toHaveLength(0);
+  });
+
   it('follows a redirect after payment by fetch\'s rules: 303 and a 301/302 POST become GET, 307/308 repeat the request', async () => {
     const cases = [
       [303, 'POST', 'GET', ''], [303, 'PUT', 'GET', ''], [302, 'POST', 'GET', ''], [301, 'POST', 'GET', ''],

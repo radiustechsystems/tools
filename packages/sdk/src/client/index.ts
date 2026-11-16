@@ -793,7 +793,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
    * Decode the settlement receipt and check it against the offer (`validatePaymentReceipt`): the
    * network, this wallet as payer, the transaction format and the scheme's amount rules. A receipt
    * that decodes but fails a check is `invalid_receipt` (details: `InvalidReceiptDetails`, with the
-   * unread `response`). A header that does not decode at all is `invalid_receipt` for `upto` and no
+   * unread `response` that carries the paid content: after a redirect, the followed one). A header that does not decode at all is `invalid_receipt` for `upto` and no
    * receipt for `exact`. A successful `upto` receipt without an amount is incomplete evidence, never
    * the authorised maximum.
    */
@@ -931,9 +931,13 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     return settled(second, second, offer);
   };
 
-  /** Report the receipt carried by `paid` (the response to the paid request) and return `result` to the caller. */
+  /**
+   * Report the receipt carried by `paid` (the response to the paid request) and return `result` to the
+   * caller. After a redirect `paid` is the spent 3xx and `result` the followed response with the paid
+   * content, so an `invalid_receipt` error carries `result` (unread) in `details.response`.
+   */
   const settled = async (paid: Response, result: Response, offer: PaymentOffer): Promise<Response> => {
-    const receipt = offer.protocol === 'x402' ? x402Receipt(paid, offer) : mppReceipt(paid, offer);
+    const receipt = offer.protocol === 'x402' ? x402Receipt(paid, offer, result) : mppReceipt(paid, offer);
     if (receipt && options.onPaid) {
       try {
         await options.onPaid(receipt, offer);
@@ -944,9 +948,10 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     return result;
   };
 
-  const x402Receipt = (res: Response, offer: X402Offer): PaymentReceipt | undefined => {
+  /** The receipt on `res`; a failed check reports `content` (the response the caller gets) as `details.response`. */
+  const x402Receipt = (res: Response, offer: X402Offer, content: Response): PaymentReceipt | undefined => {
     const header = res.headers.get('payment-response') ?? res.headers.get('x-payment-response');
-    return header ? decodeReceipt(header, offer, res) : undefined;
+    return header ? decodeReceipt(header, offer, content) : undefined;
   };
 
   /** `Payment-Receipt` of an MPP payment, completed with what the payer knows: itself, and the amount (a charge settles exactly that). */
