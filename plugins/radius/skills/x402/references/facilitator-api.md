@@ -11,8 +11,11 @@ The facilitator is a service that verifies x402 payment signatures and settles t
 
 | Network | Facilitator | URL |
 |---------|-------------|-----|
-| Mainnet (`eip155:723487`) | Radius | `https://facilitator.radiustech.xyz` |
-| Testnet (`eip155:72344`) | Radius | `https://facilitator.testnet.radiustech.xyz` |
+| Radius mainnet (`eip155:723487`) and Base (`eip155:8453`) | Radius | `https://facilitator.radiustech.xyz` |
+| Radius testnet (`eip155:72344`) and Base Sepolia (`eip155:84532`) | Radius | `https://facilitator.testnet.radiustech.xyz` |
+
+Each Radius facilitator settles its tier's Radius network and Base network; `/supported` lists
+the kinds (network, asset, transfer method) it serves.
 
 Alternative third-party facilitators include Stablecoin.xyz (`https://x402.stablecoin.xyz`),
 FareSide (`https://facilitator.x402.rs`, testnet only), and Middlebit (`https://middlebit.com`,
@@ -55,6 +58,16 @@ Returns what payment kinds and extensions the facilitator supports.
       "scheme": "exact",
       "network": "eip155:723487",
       "extra": {
+        "assetTransferMethod": "eip3009",
+        "name": "Stable Coin",
+        "version": "1"
+      }
+    },
+    {
+      "x402Version": 2,
+      "scheme": "exact",
+      "network": "eip155:723487",
+      "extra": {
         "assetTransferMethod": "permit2",
         "name": "Stable Coin",
         "version": "1"
@@ -66,7 +79,7 @@ Returns what payment kinds and extensions the facilitator supports.
 }
 ```
 
-Use this endpoint to verify a facilitator supports your target network and transfer method before integrating.
+The Radius facilitators list one `exact` kind per transfer method, `eip3009` first, then `permit2`, and a seller offers the first. An `eip3009` payment needs no approval; the `eip2612GasSponsoring` extension applies to `permit2` offers only. The facilitator picks the method from the payload shape: `authorization` is EIP-3009, `permit2Authorization` is Permit2. Use this endpoint to verify a facilitator supports your target network and transfer method before integrating.
 
 ---
 
@@ -89,7 +102,7 @@ Validates a payment signature without submitting anything on-chain. Use this to 
     "extra": {
       "name": "Stable Coin",
       "version": "1",
-      "assetTransferMethod": "permit2"
+      "assetTransferMethod": "eip3009"
     }
   }
 }
@@ -162,17 +175,20 @@ const txHash =
 
 | Error (in `invalidReason` / `errorReason`) | Likely cause | Fix |
 |-------|-------------|-----|
-| `"invalid signature"` | Wrong EIP-2612 domain (name, version, chainId, or verifyingContract) | Verify domain is `{name: "Stable Coin", version: "1", chainId: 723487, verifyingContract: SBC_ADDRESS}` |
+| `"invalid signature"` | Wrong EIP-712 domain (name, version, chainId, or verifyingContract) | Verify domain is `{name: "Stable Coin", version: "1", chainId: 723487, verifyingContract: SBC_ADDRESS}` |
 | `"insufficient balance"` | Payer doesn't have enough SBC | Fund the wallet with SBC tokens |
-| `"nonce already used"` | EIP-2612 nonce was already consumed | Re-read `nonces(address)` from the SBC contract |
-| `"expired"` | Permit deadline has passed | Use a fresh deadline (now + 300 seconds) |
+| `"nonce already used"` | EIP-2612 nonce was already consumed (Permit2 offers) | Re-read `nonces(address)` from the SBC contract |
+| `EIP3009: authorization is used` (at settle) | The EIP-3009 authorization nonce was already settled or canceled | Check `authorizationState(from, nonce)` on the SBC token, then sign a new authorization with a fresh random `bytes32` nonce |
+| `"expired"` | Authorization `validBefore` or permit deadline has passed | Use a fresh deadline (now + 300 seconds) |
 | `"unsupported network"` | Facilitator doesn't support your chain ID | Check `/supported` — use the correct facilitator for your network |
 | `"amount mismatch"` | Client signed a different amount than the server requires | Ensure client uses the exact `amount` from the 402 response |
 | Zod validation error (missing fields) | Payload missing required fields (`x402Version`, `accepted`, `payload` in paymentPayload; `amount`, `asset`, `payTo` in paymentRequirements) | Check payload structure matches spec |
 | HTTP 404 or connection refused | Wrong facilitator URL | Verify the URL and check `/health` first |
 
+> **EIP-3009 verification:** `/verify` checks `authorizationState` and the payer's balance without simulating the transfer, so a token-side revert such as `EIP3009: invalid signature` shows at `/settle`. The Radius facilitator settles with `transferWithAuthorization`, not `receiveWithAuthorization`.
+
 > **Third-party facilitator differences:**
 > - `/supported` response puts `extensions` inside `extra` instead of `assetTransferMethod`, `name`, `version`. The payment signing flow is the same — this only affects parsing `/supported`.
 > - `/health` returns an HTML page, not JSON. Do not parse it as JSON.
 > - `/verify` may return HTTP 412 (Precondition Failed) instead of 200 with `{isValid: false}` for certain errors (e.g., insufficient Permit2 allowance).
-> - Some facilitators do not process EIP-2612 gas sponsoring. Fresh wallets may need to pre-approve the Permit2 contract before their first x402 payment. See [x402-client.md](x402-client.md) for a Permit2 approval helper.
+> - Some facilitators do not process EIP-2612 gas sponsoring. Fresh wallets may need to pre-approve the Permit2 contract before their first Permit2 payment. See [x402-client.md](x402-client.md) for a Permit2 approval helper.
