@@ -58,6 +58,8 @@
 /dashboard                                              /build/dashboard                              301
 /dashboard/                                             /build/dashboard/                             301
 /dashboard.md                                           /build/dashboard.md                           301
+# Crawlers still follow two broken links from a cached copy of the old /dashboard page
+/dashboard/*                                            /build/dashboard/                             301
 /make-payments                                          /build/make-payments                          301
 /make-payments/                                         /build/make-payments/                         301
 /make-payments.md                                       /build/make-payments.md                       301
