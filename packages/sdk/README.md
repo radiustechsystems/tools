@@ -163,9 +163,12 @@ What you get, on the wire, with no Radius-specific client knowledge required:
   uncertain 502) against the transaction before the buyer pays again.
 - Pending and unknown settlement are not rejections. A facilitator answer of
   `errorReason: 'settlement_pending'` gets `503` with `Retry-After` and the facilitator's
-  `PAYMENT-RESPONSE` (the broadcast transaction), in both settle modes; a settle call with no
-  facilitator answer gets `502` with `settlement: 'unknown'`. Only rejections and failures are
-  `402`. `onSettlement(outcome, context)` reports every attempt (`settled`, `pending`, `unknown`,
+  `PAYMENT-RESPONSE` (the broadcast transaction); a settle call with no facilitator answer gets
+  `502` with `settlement: 'unknown'`. That is `settle: 'before'`, where the handler has not run and
+  the buyer presents the same payment again. With `settle: 'after'` the handler has run and
+  `/verify` would refuse the payment once it settles, so both deliver the handler's response with
+  a `PAYMENT-RESPONSE` of `success: false` (`settlement_pending` or `settlement_unknown`); reconcile
+  them from `onSettlement`. Only rejections and failures are `402`. `onSettlement(outcome, context)` reports every attempt (`settled`, `pending`, `unknown`,
   `rejected`, `failed`) with the signed payment; `classifySettlement` replaces the rule that
   recognises a pending answer.
 - `eip2612GasSponsoring` is declared only when the facilitator's `/supported` lists it
@@ -283,7 +286,9 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   was signed. A `pending` or `unknown` one carries `outcome.pending`, and
   `payFetch.resume(outcome.pending, { maxAttempts, signal })` presents the **same** signed payment
   again with backoff until it settles (delivering the original purchase), fails or is rejected. It
-  never signs a new payment; aborting stops the wait, not the payment. Plain `payFetch` keeps its
+  never signs a new payment; aborting stops the wait, not the payment. When the seller delivered
+  with an unsettled receipt (`settle: 'after'`), the outcome has `delivered: true` and
+  `pending.replayable: false`, and `resume` only checks the chain. Plain `payFetch` keeps its
   behaviour; `onPaymentPending` hands its callers the same record. The record holds a signed
   authorization that anyone can settle until it expires: keep it like a secret and never log it.
 - Redirects: `fetch` follows them before the 402 (its limit of 20) and the request is paid at the final URL

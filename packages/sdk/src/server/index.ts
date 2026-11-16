@@ -11,7 +11,7 @@ import {
   type RouteConfig,
   type RoutesConfig,
 } from '@x402/core/server';
-import { decodePaymentResponseHeader } from '@x402/core/http';
+import { decodePaymentResponseHeader, encodePaymentResponseHeader } from '@x402/core/http';
 import { SettleError, type PaymentPayload, type PaymentRequirements, type SettleResponse } from '@x402/core/types';
 import { resolveNetwork, explorerTxUrl, isNetworkId, overridesOf, type Address, type NetworkInput, type NetworkOverrides, type PaymentNetwork } from '../networks.js';
 import { resolvePrice, type Price } from '../amounts.js';
@@ -87,7 +87,10 @@ export interface RadiusServerOptions extends NetworkOverrides {
    * 'before' (default): settle on-chain, then run the handler — the handler only ever runs for
    * money already received. x402 core makes no separate `/verify` call; `/settle` validates.
    * 'after': `/verify`, run the handler, then `/settle` if it succeeded (x402's default flow).
-   * See `SettleMode`.
+   * In 'after' mode a pending or unknown settlement still delivers the handler's response, with a
+   * `PAYMENT-RESPONSE` that reports the outcome (`success: false`): the buyer could not present the
+   * payment again, since `/verify` refuses an authorization once it is used. Reconcile those through
+   * `onSettlement`. See `SettleMode`.
    */
   settle?: SettleMode;
   /**
@@ -126,7 +129,7 @@ export interface RadiusServerOptions extends NetworkOverrides {
    * pending settlement differently. Settle calls with no facilitator answer are always `unknown`.
    */
   classifySettlement?: SettlementClassifier;
-  /** Seconds sent in `Retry-After` with a pending (`503`) or unknown (`502`) settlement. Default 2. */
+  /** Seconds sent in `Retry-After` with a pending (`503`) or unknown (`502`) settlement (`settle: 'before'`). Default 2. */
   settlementRetryAfter?: number;
 }
 
@@ -657,12 +660,8 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
     return fe ? facilitatorFailure(fe) : internalErrorResponse(error);
   };
 
-  /**
-   * x402 core answers every failed settlement with a 402 carrying the settle response in
-   * `PAYMENT-RESPONSE`. A pending or unknown settlement is not a rejection: a 402 would tell the
-   * buyer to pay again. Answer `503` (pending) or `502` (unknown) instead, keeping the header.
-   */
-  const settlementFailure = (res: Response): Response | undefined => {
+  /** The settle response x402 core put in a failed settlement's 402, when it is pending or unknown. */
+  const unsettledOf = (res: Response): { status: 'pending' | 'unknown'; settle: SettleResponseLike & { errorMessage?: string }; header: string } | undefined => {
     const header = res.status === 402 ? res.headers.get(PAYMENT_RESPONSE_HEADER) : null;
     if (!header) return undefined;
     let settle: SettleResponseLike & { errorMessage?: string };
@@ -673,9 +672,37 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
     }
     if (settle.success) return undefined;
     const status = radius.classifySettlement(settle);
+    return status === 'pending' || status === 'unknown' ? { status, settle, header } : undefined;
+  };
+
+  /**
+   * x402 core answers every failed settlement with a 402 carrying the settle response in
+   * `PAYMENT-RESPONSE`. A pending or unknown settlement is not a rejection: a 402 would tell the
+   * buyer to pay again. Answer `503` (pending) or `502` (unknown) instead, keeping the header, so the
+   * buyer presents the same payment again (`settle: 'before'`: the handler has not run, `/settle` is
+   * idempotent for the same payment).
+   */
+  const settlementFailure = (res: Response): Response | undefined => {
+    const unsettled = unsettledOf(res);
+    if (!unsettled) return undefined;
+    const { status, settle, header } = unsettled;
     if (status === 'pending') return settlementPendingResponse(retryAfter, settle, header);
-    if (status === 'unknown') return settlementUnknownResponse(retryAfter, settle.errorMessage ?? settle.errorReason ?? 'Settlement outcome unknown', header);
-    return undefined;
+    return settlementUnknownResponse(retryAfter, settle.errorMessage ?? settle.errorReason ?? 'Settlement outcome unknown', header);
+  };
+
+  /**
+   * `settle: 'after'`, pending or unknown settlement: the handler already ran, and presenting the
+   * payment again would fail `/verify` once the authorization is used (the facilitator checks it on
+   * chain before any idempotency lookup), leaving the buyer charged with nothing. So deliver the
+   * handler's response with the unsettled `PAYMENT-RESPONSE` (`success: false`, `errorReason`, any
+   * `transaction`); the buyer confirms on chain, and the seller reconciles through `onSettlement`.
+   */
+  const deliverUnsettled = (res: Response, body: Uint8Array<ArrayBuffer>, paymentResponse: string): Response => {
+    const out = mutable(res, body);
+    out.headers.set(PAYMENT_RESPONSE_HEADER, paymentResponse);
+    out.headers.set('Cache-Control', 'no-store');
+    out.headers.delete(SETTLEMENT_OVERRIDES_HEADER);
+    return out;
   };
 
   // Lazy, request-time initialisation: Workers forbid I/O at module scope, and the static
@@ -815,6 +842,10 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
       );
       if (!settleResult.success) {
         const failure = instructionsToResponse(settleResult.response);
+        if (!beforeHandlerSettlement) {
+          const unsettled = unsettledOf(failure);
+          if (unsettled) return deliverUnsettled(res, responseBody!, unsettled.header);
+        }
         return settlementFailure(failure) ?? failure;
       }
       const out = mutable(res, responseBody ?? res.body);
@@ -823,6 +854,11 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
       out.headers.delete(SETTLEMENT_OVERRIDES_HEADER);
       return out;
     } catch (error) {
+      if (error instanceof SettlementUnknownError && !beforeHandlerSettlement) {
+        // No facilitator answer: the settle may have mined. Deliver, marking the outcome unknown.
+        const header = encodePaymentResponseHeader({ success: false, errorReason: SETTLEMENT_UNKNOWN_REASON, errorMessage: error.message, transaction: '', network: paymentRequirements.network });
+        return deliverUnsettled(res, responseBody!, header);
+      }
       if (error instanceof FacilitatorResponseError) return facilitatorFailure(error);
       console.error(error);
       return jsonResponse({ error: 'settlement_error' }, 402);

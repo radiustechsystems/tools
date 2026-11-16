@@ -259,11 +259,14 @@ describe('radiusPayments when the facilitator gives no answer', () => {
     expect(await res.text()).not.toContain('secret');
   });
 
-  it('answers 502 when settle fails after the handler (settle: "after")', async () => {
+  it('delivers with an unknown PAYMENT-RESPONSE when settle gets no answer after the handler (settle: "after")', async () => {
+    // The handler ran and /verify would refuse the payment once it settles, so a retry could not help.
     mockFacilitator((path) => (path === 'verify' ? verified() : gatewayTimeout()));
     const res = await pay(makeApp({ settle: 'after' }));
-    expect(res.status).toBe(502);
-    expect(await res.text()).not.toContain('secret');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(JSON.parse(Buffer.from(res.headers.get('payment-response')!, 'base64').toString())).toMatchObject({ success: false, errorReason: 'settlement_unknown', transaction: '' });
+    expect(await res.text()).toContain('secret');
   });
 
   it('answers 502 when verify returns an error page (settle: "after")', async () => {

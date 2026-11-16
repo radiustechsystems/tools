@@ -212,11 +212,13 @@ The SDK's web-standard and Hono handlers pass the response body through without 
 
 A settlement can be submitted without a final answer. The SDK handlers do not answer those with `402`, which would tell the buyer to pay again:
 
-- **Pending:** the facilitator broadcast the transaction but has no result yet (`errorReason: 'settlement_pending'`). The handler answers `503` with `Retry-After` and the facilitator's `PAYMENT-RESPONSE`, which names the transaction.
-- **Unknown:** the settle call timed out or lost its connection. The handler answers `502` with `error: 'facilitator_error'`, `settlement: 'unknown'` and `Retry-After`. The payment may already have settled.
+- **Pending:** the facilitator broadcast the transaction but has no result yet (`errorReason: 'settlement_pending'`). With `settle: 'before'`, the handler answers `503` with `Retry-After` and the facilitator's `PAYMENT-RESPONSE`, which names the transaction.
+- **Unknown:** the settle call timed out or lost its connection. With `settle: 'before'`, the handler answers `502` with `error: 'facilitator_error'`, `settlement: 'unknown'` and `Retry-After`. The payment may already have settled.
 - **Rejected or failed:** the facilitator refused the payment or its transaction reverted. The handler answers `402`, as before.
 
-In both uncertain cases your handler does not run with `settle: 'before'`. The buyer presents the same signed payment again, and the facilitator settles it against the transaction it already broadcast, so the purchase is delivered once and charged once; the SDK's buyer does this with [`payFetch.resume`](/reference/radius-sdk#pending-and-unknown-payments). With `settle: 'after'` your handler runs again on that retry, so keep it idempotent.
+In both uncertain cases your handler does not run with `settle: 'before'`. The buyer presents the same signed payment again, and the facilitator settles it against the transaction it already broadcast, so the purchase is delivered once and charged once; the SDK's buyer does this with [`payFetch.resume`](/reference/radius-sdk#pending-and-unknown-payments).
+
+With `settle: 'after'`, your handler has already run, and the buyer cannot present the payment again: the facilitator's `/verify` refuses it once its transaction has mined. So the handler's response goes to the buyer with a `PAYMENT-RESPONSE` of `success: false` (`errorReason: 'settlement_pending'` with the transaction, or `'settlement_unknown'`). The buyer confirms the payment on chain. Reconcile these outcomes yourself: a pending one usually settles, but a revert, or an unknown settle that never reached the chain, leaves the delivery unpaid.
 
 Record every outcome with `onSettlement`. It also receives the buyer's signed payment, which anyone can settle until it expires: store it like a secret and never log it.
 

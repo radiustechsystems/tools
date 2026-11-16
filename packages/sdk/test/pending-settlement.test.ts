@@ -220,38 +220,62 @@ describe('receipts of a pending settlement', () => {
 });
 
 describe('seller: pending and unknown settlement are not rejections', () => {
+  it("settle: 'before' answers a pending settlement with 503, the pending receipt and Retry-After, and withholds the content", async () => {
+    const fac = facilitator(['pending']);
+    const s = seller(fac.client, 'before');
+    const b = buyer(s.app);
+    const res = await b.payFetch(URL_PAID);
+    expect(res.status).toBe(503);
+    expect(res.headers.get('retry-after')).toBe('0');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    const body = await res.json();
+    expect(body).toMatchObject({ error: 'settlement_pending', transaction: TX });
+    expect(JSON.stringify(body)).not.toContain('CONTENT');
+    expect(getPaymentReceipt(res)).toMatchObject({ success: false, errorReason: 'settlement_pending', transaction: TX });
+    // x402 core re-presents a pending settle once on its own; both calls report the one transaction.
+    expect(fac.seen.settleCalls).toBe(2);
+    expect(s.deliveries()).toBe(0);
+    expect(s.outcomes.map((o) => o.status)).toEqual(['pending']);
+    expect(s.outcomes[0]).toMatchObject({ phase: 'before-handler', receipt: { transaction: TX, charge: { evidence: 'pending' } } });
+    expect(s.outcomes[0].payment.payload.payload).toHaveProperty('signature');
+  });
+
+  it("settle: 'before' answers a settle with no facilitator answer with 502 settlement: 'unknown'", async () => {
+    const fac = facilitator(['hang']);
+    const s = seller(fac.client, 'before');
+    const res = await buyer(s.app).payFetch(URL_PAID);
+    expect(res.status).toBe(502);
+    expect(res.headers.get('retry-after')).toBe('0');
+    expect(await res.json()).toMatchObject({ error: 'facilitator_error', settlement: 'unknown' });
+    expect(s.outcomes.map((o) => o.status)).toEqual(['unknown']);
+    expect(s.outcomes[0].receipt).toMatchObject({ success: false, errorReason: 'settlement_unknown' });
+  });
+
+  it("settle: 'after' delivers the handler's response with the pending receipt: the buyer could not present the payment again", async () => {
+    const fac = facilitator(['pending']);
+    const s = seller(fac.client, 'after');
+    const res = await buyer(s.app).payFetch(URL_PAID);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ report: 'CONTENT' });
+    expect(res.headers.get('retry-after')).toBeNull();
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(getPaymentReceipt(res)).toMatchObject({ success: false, errorReason: 'settlement_pending', transaction: TX });
+    expect(s.deliveries()).toBe(1);
+    expect(s.outcomes.map((o) => [o.status, o.phase])).toEqual([['pending', 'after-handler']]);
+    expect(s.outcomes[0].payment.payload.payload).toHaveProperty('signature');
+  });
+
+  it("settle: 'after' delivers with an unknown receipt when settle gets no facilitator answer", async () => {
+    const fac = facilitator(['hang']);
+    const s = seller(fac.client, 'after');
+    const res = await buyer(s.app).payFetch(URL_PAID);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ report: 'CONTENT' });
+    expect(getPaymentReceipt(res)).toMatchObject({ success: false, errorReason: 'settlement_unknown' });
+    expect(s.outcomes.map((o) => [o.status, o.phase])).toEqual([['unknown', 'after-handler']]);
+  });
+
   for (const settle of ['before', 'after'] as const) {
-    it(`settle: '${settle}' answers a pending settlement with 503, the pending receipt and Retry-After, and withholds the content`, async () => {
-      const fac = facilitator(['pending']);
-      const s = seller(fac.client, settle);
-      const b = buyer(s.app);
-      const res = await b.payFetch(URL_PAID);
-      expect(res.status).toBe(503);
-      expect(res.headers.get('retry-after')).toBe('0');
-      expect(res.headers.get('cache-control')).toBe('no-store');
-      const body = await res.json();
-      expect(body).toMatchObject({ error: 'settlement_pending', transaction: TX });
-      expect(JSON.stringify(body)).not.toContain('CONTENT');
-      expect(getPaymentReceipt(res)).toMatchObject({ success: false, errorReason: 'settlement_pending', transaction: TX });
-      // x402 core re-presents a pending settle once on its own; both calls report the one transaction.
-      expect(fac.seen.settleCalls).toBe(2);
-      expect(s.deliveries()).toBe(settle === 'after' ? 1 : 0);
-      expect(s.outcomes.map((o) => o.status)).toEqual(['pending']);
-      expect(s.outcomes[0]).toMatchObject({ phase: `${settle}-handler`, receipt: { transaction: TX, charge: { evidence: 'pending' } } });
-      expect(s.outcomes[0].payment.payload.payload).toHaveProperty('signature');
-    });
-
-    it(`settle: '${settle}' answers a settle with no facilitator answer with 502 settlement: 'unknown'`, async () => {
-      const fac = facilitator(['hang']);
-      const s = seller(fac.client, settle);
-      const res = await buyer(s.app).payFetch(URL_PAID);
-      expect(res.status).toBe(502);
-      expect(res.headers.get('retry-after')).toBe('0');
-      expect(await res.json()).toMatchObject({ error: 'facilitator_error', settlement: 'unknown' });
-      expect(s.outcomes.map((o) => o.status)).toEqual(['unknown']);
-      expect(s.outcomes[0].receipt).toMatchObject({ success: false, errorReason: 'settlement_unknown' });
-    });
-
     it(`settle: '${settle}' keeps 402 for rejections and reports rejected and failed outcomes`, async () => {
       for (const [step, status] of [['reject', 'rejected'], ['reverted', 'failed']] as const) {
         const s = seller(facilitator([step]).client, settle);
@@ -417,17 +441,68 @@ describe('buyer: pay() and resume() recover the original authorization', () => {
     expect(settled).toMatchObject({ delivered: false, evidence: 'chain', reconciliation: { status: 'confirmed' } });
   });
 
-  it('settle: after recovers too, when the facilitator accepts the pending payment again', async () => {
-    const fac = facilitator(['pending', 'pending', 'success']);
+  it("settle: 'after' pending: delivered and pending, not replayable; resume asks the chain and never sends the payment again", async () => {
+    const fac = facilitator(['pending']);
+    // As the Radius facilitator does: /verify refuses an authorization once its transaction mined.
+    const { state, client } = chain();
+    fac.client.verify = async () => (state.mined ? { isValid: false, invalidReason: 'nonce_used', payer: BUYER.address } : { isValid: true, payer: BUYER.address });
     const s = seller(fac.client, 'after');
     const b = buyer(s.app);
-    const { client } = chain();
     const first = expectStatus(await b.payFetch.pay(URL_PAID), 'pending');
-    const done = expectStatus(await b.payFetch.resume(first.pending, { ...FAST, client }), 'settled');
-    expect(done.delivered).toBe(true);
-    expect(s.outcomes.map((o) => [o.status, o.phase])).toEqual([['pending', 'after-handler'], ['settled', 'after-handler']]);
-    // 'after' runs the handler before every settle: make it idempotent, or settle 'before'.
-    expect(s.deliveries()).toBe(2);
+    expect(first.delivered).toBe(true);
+    expect(await first.response!.json()).toMatchObject({ report: 'CONTENT' });
+    expect(first.pending).toMatchObject({ replayable: false, transaction: TX });
+
+    // Not mined yet: still pending (the authorization is unused but valid), and nothing was sent.
+    const waiting = expectStatus(await b.payFetch.resume(first.pending, { ...FAST, maxAttempts: 2, client }), 'pending');
+    expect(waiting).toMatchObject({ delivered: true, pending: { replayable: false } });
+    expect(b.paidRequests()).toBe(1);
+
+    state.mined = 'success';
+    const done = expectStatus(await b.payFetch.resume(waiting.pending, { ...FAST, client }), 'settled');
+    expect(done).toMatchObject({ delivered: true, evidence: 'chain', reconciliation: { status: 'confirmed' } });
+    expect(b.paidRequests()).toBe(1);
+    expect(s.deliveries()).toBe(1);
+    expect(fac.seen.settleCalls).toBe(2); // x402 core's own single re-presentation; the buyer sent nothing more
+    expectSamePayment(b);
+  });
+
+  it("settle: 'after' pending that reverts: resume reports failed from the chain, without sending the payment again", async () => {
+    const s = seller(facilitator(['pending']).client, 'after');
+    const b = buyer(s.app);
+    const { state, client } = chain();
+    const first = expectStatus(await b.payFetch.pay(URL_PAID), 'pending');
+    state.mined = 'reverted';
+    expectStatus(await b.payFetch.resume(first.pending, { ...FAST, client }), 'failed');
+    expect(b.paidRequests()).toBe(1);
+  });
+
+  it("settle: 'after' unknown: delivered, not replayable; a used authorization settles it", async () => {
+    const s = seller(facilitator(['hang']).client, 'after');
+    const pendings: PendingPayment[] = [];
+    const b = buyer(s.app, { onPaymentPending: (p) => pendings.push(p) });
+    const res = await b.payFetch(URL_PAID);
+    expect(await res.json()).toMatchObject({ report: 'CONTENT' });
+    expect(pendings).toMatchObject([{ status: 'unknown', replayable: false }]);
+    const { state, client } = chain();
+    state.authorizationUsed = true;
+    const done = expectStatus(await b.payFetch.resume(pendings[0], { ...FAST, client }), 'settled');
+    expect(done).toMatchObject({ delivered: true, evidence: 'authorization' });
+    expect(b.paidRequests()).toBe(1);
+  });
+
+  it("settle: 'before' keeps the 503 and the retry: resume presents the same payment again", async () => {
+    const fac = facilitator(['pending', 'pending', 'success']);
+    const s = seller(fac.client, 'before');
+    const b = buyer(s.app);
+    const first = expectStatus(await b.payFetch.pay(URL_PAID), 'pending');
+    expect(first.response?.status).toBe(503);
+    expect(first.delivered).toBeUndefined();
+    expect(first.pending.replayable).toBeUndefined();
+    const done = expectStatus(await b.payFetch.resume(first.pending, { ...FAST, client: chain().client }), 'settled');
+    expect(done).toMatchObject({ delivered: true, evidence: 'receipt' });
+    expect(b.paidRequests()).toBe(2);
+    expect(s.deliveries()).toBe(1);
     expectSamePayment(b);
   });
 
@@ -548,6 +623,20 @@ describe('plain payFetch keeps its behaviour and hands over the pending payment'
     expect((error as RadiusPaymentError).code).toBe('payment_rejected');
     expect(((error as RadiusPaymentError).details as PaymentRejectedDetails).pending).toMatchObject({ status: 'pending', transaction: TX });
     expectStatus(await b.payFetch.pay(URL_PAID), 'pending');
+  });
+
+  it('keeps the body without onPaymentPending, so resuming details.pending re-sends the POST with it', async () => {
+    const receipt = Buffer.from(JSON.stringify({ success: false, errorReason: 'settlement_pending', transaction: TX, network: NETWORK.network, payer: BUYER.address })).toString('base64');
+    const s = seller(facilitator(['success']).client);
+    let paid = 0;
+    const app = async (request: Request) => (request.headers.has('payment-signature') && ++paid === 1 ? new Response('{}', { status: 402, headers: { 'PAYMENT-RESPONSE': receipt } }) : s.app(request));
+    const b = buyer(app); // no onPaymentPending
+    const error = (await b.payFetch(URL_PAID, { method: 'POST', body: 'query=1', headers: { 'content-type': 'text/plain' } }).catch((e: unknown) => e)) as RadiusPaymentError;
+    const pending = (error.details as PaymentRejectedDetails).pending!;
+    expect(pending.request.body).toEqual(new TextEncoder().encode('query=1'));
+    const done = expectStatus(await b.payFetch.resume(pending, FAST), 'settled');
+    expect(await done.response!.json()).toEqual({ report: 'CONTENT', body: 'query=1' });
+    expectSamePayment(b);
   });
 });
 
