@@ -1,0 +1,89 @@
+---
+title: Metered and session payments
+description: Charge and pay for usage on Radius with per-request prices, the upto scheme, MPP charges, and one payment per interval. What works today and what is planned.
+---
+
+import { STABLECOIN } from '../../constants';
+
+# Metered and session payments [What works today, and what is planned]
+
+Metering means charging for what a caller uses instead of a flat fee: per call, per unit of work, or per interval of time. A session is a run of such payments for one ongoing use, such as a stream of model output or a minute-by-minute connection.
+
+On Radius, every charge is an [x402](/build/x402) or [MPP](/reference/radius-sdk#mpp) payment in {STABLECOIN} that settles on-chain. `radius-sdk` and `radius-cli` support metering by pricing each request. There is no session or channel primitive yet, and sellers cannot yet charge a variable amount after the work is done.
+
+## Today
+
+| Pattern                       | Buyer: `createRadiusFetch`, `radius-cli` | Seller: `radius-sdk`, Radius Platform |
+| ----------------------------- | ---------------------------------------- | ------------------------------------- |
+| Fixed price per request       | Pays (`exact`)                           | Charges (`exact`)                     |
+| Price computed from a request | Pays the quoted price                    | Charges, with a price function        |
+| Authorize a maximum (`upto`)  | Pays                                     | Not available                         |
+| MPP `evm` charge              | Pays                                     | Charges, with the `mpp` option        |
+| One payment per interval      | Pays one request per interval            | Charges one request per interval      |
+| Seller-metered session        | Not available                            | Not available                         |
+| Payment channel               | Not available in `radius-sdk`            | Not available in `radius-sdk`         |
+
+### Price each request
+
+The seller sets a price per route, and the buyer pays it before the response. The [`exact`](/build/x402) scheme settles exactly the quoted amount, such as 0.001 {STABLECOIN} per call. A price can be a function of the request, so the model, the size of the input, or a tier sets it, and the buyer sees the price in the `402` challenge before it signs.
+
+To charge only for calls that succeed, set `settle: 'after'`: the handler runs first, and the payment settles only when it responds with a status below 400. [API metering](/build/examples/real-time-api-metering) is a complete example, and [choose when payment settles](/build/accept-payments#choose-when-payment-settles) covers the trade-offs.
+
+The price is fixed when the challenge is issued. A handler cannot charge more, or less, after it has done the work.
+
+### Pay up to a maximum (`upto`)
+
+`upto` is an x402 v2 scheme in which the buyer authorizes a maximum and the facilitator settles the actual charge, up to that maximum. In `radius-sdk` and the Radius Platform, it is a **buyer-side** capability only:
+
+- **Buyers:** `createRadiusFetch` and `radius-cli wallet pay` pay `upto` offers with a Permit2 authorization. `maxPerRequest` and `--threshold` are compared with the maximum, not the expected charge.
+- **Sellers:** `radiusPayments`, `createRadiusServer`, the Hono middleware, and the Radius Platform policy issue `exact` offers only. An `upto` offer comes from a seller that uses other x402 tooling and a facilitator that settles `upto`.
+
+The facilitator reports the actual charge in the `amount` field of the `PAYMENT-RESPONSE` header. `radius-sdk` checks it: a reported amount that is not a whole number of base units, or that exceeds the signed maximum, throws `invalid_receipt`. When the facilitator reports no amount, the receipt shows the maximum. Read the charge from the receipt in `onPaid`, or from `getPaymentReceipt`:
+
+```typescript
+import { createRadiusFetch } from 'radius-sdk/client';
+
+const payFetch = createRadiusFetch({
+  network: 'testnet',
+  signer: process.env.RADIUS_PRIVATE_KEY as `0x${string}`,
+  maxPerRequest: '0.01 SBC',
+  onPaid: (receipt, offer) => {
+    // For upto, offer.amount is the authorized maximum and receipt.amount the charge.
+    console.log(offer.scheme, offer.amount, receipt.amount, receipt.transaction);
+  },
+});
+```
+
+With `--json`, `radius-cli` reports the same value as `payment.amount`, with `payment.scheme` set to `upto`.
+
+### MPP charges
+
+An MPP `evm` charge is one fixed payment per request, like `exact` with EIP-3009. Sellers add it to `radiusPayments` with `mpp: { secretKey }`, and buyers pay it with the same client. `radius-sdk` and `radius-cli` support the `charge` intent only and refuse other MPP intents. See [MPP](/reference/radius-sdk#mpp).
+
+### Pay on an interval
+
+To bill an ongoing use, make each interval one paid request. The seller prices a route such as `POST /sessions/*/usage`, and the client calls it every second or minute while it uses the service. The seller stops serving when an interval goes unpaid, and the client stops paying when it stops using the service, so at most one interval is outstanding.
+
+Each interval settles on Radius as its own payment. `maxPerRequest` caps each interval, and a total budget in `onPaymentRequired` caps the session; see [limit what you pay](/build/make-payments#limit-what-you-pay). [Streaming payments](/build/examples/streaming-payments) describes the pattern and its use cases.
+
+A paid streaming response, such as server-sent events, is one payment for the whole request: settlement covers the request, not each chunk. See [stream a paid response](/build/accept-payments#stream-a-paid-response).
+
+## Planned
+
+:::note[Not available yet]
+The items below are planned or under design. None of them is in `radius-sdk`, `radius-cli`, or the Radius Platform today, and the APIs may change before release.
+:::
+
+- **`upto` on the Radius facilitators.** Settling `upto` payments through the Radius facilitators, and listing the scheme in their `/supported` response.
+- **Seller-side metered payments.** A `radius-sdk` seller API that quotes a maximum, lets your handler meter the work, and settles the actual charge once, with a receipt that carries it. The Radius Platform policy and `pricing.md` would also gain metered prices with an `upto` maximum.
+- **Pricing by transport.** Prices for MCP tool calls and for WebSocket and streamed messages, instead of one price per HTTP request.
+
+Payment channels, which settle many small increments in fewer on-chain transactions, are not part of `radius-sdk`. The [`radius-stream-channel`](https://github.com/radius-workshop/radius-stream-channel) workshop project shows one approach with cumulative vouchers.
+
+## Next steps
+
+- [API metering](/build/examples/real-time-api-metering) — Price each call from the request and settle when it succeeds
+- [Streaming payments](/build/examples/streaming-payments) — One payment per interval of use
+- [Agent spend policy](/build/agent-spend-policy) — Per-request caps today, and proposed budgets
+- [Make payments](/build/make-payments) — Limits, errors, and receipts for buyers
+- [Accept payments](/build/accept-payments) — Prices, recipients, and settlement timing for sellers

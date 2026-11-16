@@ -82,6 +82,7 @@ const BUILD_SIDEBAR: SidebarItem[] = [
       { text: 'Make payments', link: '/build/make-payments' },
       { text: 'Set up an agent to pay', link: '/build/make-payments/agents' },
       { text: 'x402 payments', link: '/build/x402' },
+      { text: 'Metered and session payments', link: '/build/metered-payments' },
     ],
   },
   {
@@ -108,6 +109,7 @@ const BUILD_SIDEBAR: SidebarItem[] = [
     items: [
       { text: 'Coding assistants', link: '/build/coding-assistants' },
       { text: 'Tooling configuration', link: '/build/tooling' },
+      { text: 'Agent spend policy', link: '/build/agent-spend-policy' },
     ],
   },
   {
