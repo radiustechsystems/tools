@@ -266,7 +266,15 @@ async function readNonce(
 
 x402 on Radius supports multiple payment schemes and transfer methods. Check the facilitator's `/supported` response and the server's actual 402 offer before choosing one.
 
-### Permit2 flow (`permit2`) — recommended
+### EIP-3009 flow (`eip3009`) — preferred for SBC
+
+SBC implements EIP-3009. The payer signs one EIP-712 `TransferWithAuthorization` in the SBC token's domain (`name` `Stable Coin`, `version` `1`, the chain ID, and the SBC token as `verifyingContract`), with `to` set to the offer's `payTo`, a random `bytes32` nonce, and a `validAfter`/`validBefore` window. The facilitator submits it with `transferWithAuthorization` on the token.
+
+- The payer needs **no** allowance and **no** gas.
+- Each nonce works once: replaying a settled authorization reverts `EIP3009: authorization is used`. `authorizationState(from, nonce)` on the SBC token tells you whether it was used.
+- The Radius facilitators list `eip3009` first in `/supported`, so `radius-sdk` sellers offer it by default.
+
+### Permit2 flow (`permit2`) — alternative
 
 The payer signs a Permit2 `SignatureTransfer` message. The facilitator submits it to the canonical `x402ExactPermit2Proxy` contract, which executes the transfer.
 
@@ -276,7 +284,7 @@ The payer signs a Permit2 `SignatureTransfer` message. The facilitator submits i
 
 ### EIP-2612 gas sponsoring extension
 
-`eip2612GasSponsoring` is an extension to the Permit2 payment flow, not a separate payment scheme. It lets a fresh SBC wallet sign an EIP-2612 permit granting the Permit2 contract an allowance while the facilitator pays the transaction gas. The x402 payment is still authorized with the Permit2 signature and settled through the proxy.
+`eip2612GasSponsoring` is an extension to the Permit2 payment flow, not a separate payment scheme, and an EIP-3009 payment does not use it. It lets a fresh SBC wallet sign an EIP-2612 permit granting the Permit2 contract an allowance while the facilitator pays the transaction gas. The x402 payment is still authorized with the Permit2 signature and settled through the proxy.
 
 The EIP-2612 permit's spender is the canonical Permit2 contract (`0x000000000022D473030F116dDEE9F6B43aC78BA3`), not the facilitator or merchant. Use `createRadiusFetch` from `radius-sdk/client` for buyer signing so the permit and payment signatures match the advertised offer.
 
