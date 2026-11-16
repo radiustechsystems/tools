@@ -12,9 +12,10 @@
  *
  * Two caps: a route that does not answer 402 at all (the `status` check failed) scores 0, and a run
  * that never reached the 402 (a free quota that was not used up) scores at most 50, since most of
- * the seller was not checked.
+ * the seller was not checked. `sell check --min-score` fails such a run whatever its score (see
+ * `stoppedBefore402`).
  */
-import type { Check } from './sellCheck.js';
+import type { Check, SellCheckReport } from './sellCheck.js';
 
 export const SCORE_WEIGHTS = { blockingFail: 40, fail: 15, warn: 5 } as const;
 /** The most a run that never reached the 402 can score. */
@@ -41,6 +42,15 @@ export function deductionOf(check: Pick<Check, 'id' | 'status' | 'blocking'>): n
   if (check.status === 'fail') return isBlocking(check) ? SCORE_WEIGHTS.blockingFail : SCORE_WEIGHTS.fail;
   if (check.status === 'warn') return SCORE_WEIGHTS.warn;
   return 0;
+}
+
+/**
+ * True when a run stopped before it read a 402 without a failed `status` check: a free quota that
+ * was not used up (`--free-requests` too low, or 0). The 402 was never checked, so `sell check
+ * --min-score` counts the run as blocking, like a route that does not answer 402.
+ */
+export function stoppedBefore402(report: Pick<SellCheckReport, 'status' | 'checks'>): boolean {
+  return report.status !== 402 && !report.checks.some((c) => c.id === 'status' && c.status === 'fail');
 }
 
 /**

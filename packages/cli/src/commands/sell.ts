@@ -8,7 +8,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import type { Check, CheckStatus, SellCheckOptions, SellCheckReport } from '../lib/sellCheck.js';
 import type { RouteResult, RoutesReport } from '../lib/sellCheckRoutes.js';
 import type { PricingRoute } from '../lib/pricingMd.js';
-import { blockingFailures, githubAnnotations } from '../lib/sellCheckScore.js';
+import { blockingFailures, githubAnnotations, stoppedBefore402 } from '../lib/sellCheckScore.js';
 import type { OpenApiCache } from '../lib/sellCheckDiscovery.js';
 import type { GlobalOptions } from '../types.js';
 
@@ -53,8 +53,8 @@ export function registerSell(program: Command): void {
         '',
         'Score: 0 to 100. Each blocking failure (buyers cannot pay, or get the route free) costs 40, any other failure 15,',
         'a warning 5. A route that does not answer 402 scores 0; a run that never reached the 402 scores at most 50.',
-        'With --min-score <n>, exit 1 when the score is below n or any blocking failure occurred, else 0 (other failures',
-        'and warnings only lower the score).',
+        'With --min-score <n>, exit 1 when the score is below n, any blocking failure occurred, or a run never reached the',
+        '402 (a free quota not used up), else 0 (other failures and warnings only lower the score).',
         '',
         'CI: output is always plain text without color. When CI or GITHUB_ACTIONS is set (to anything but empty, 0 or',
         'false), --pay is refused (exit 2), so a CI run never pays or prompts. When GITHUB_ACTIONS=true it also prints',
@@ -96,7 +96,7 @@ export function registerSell(program: Command): void {
     .option('--threshold <decimal>', "with --pay: most to pay, in the asset's display units (required)")
     .option('--networks <list>', `with --pay: networks to pay on (${PAY_NETWORKS.join(', ')}; default radius)`)
     .option('--timeout <ms>', 'timeout for each request, in milliseconds', '15000')
-    .option('--min-score <n>', 'exit 1 when the score (0 to 100) is below n or a blocking check failed; other failures only lower the score')
+    .option('--min-score <n>', 'exit 1 when the score (0 to 100) is below n, a blocking check failed or the 402 was not reached; other failures only lower the score')
     .option('--openapi <url|file>', "OpenAPI document for the discovery check (default: /openapi.json on the route's origin)")
     .option('--no-openapi', 'skip the OpenAPI discovery check')
     .action(async (url: string | undefined, sub: CheckOptions, cmd: Command) => {
@@ -212,10 +212,13 @@ async function runCheck(url: string | undefined, sub: CheckOptions, opts: Global
   } else openapi = typeof sub.openapi === 'string' ? sub.openapi : undefined;
 
   const github = onGitHubActions();
-  // With --min-score, a run passes when the score reaches it and no check failed in a way that stops
-  // buyers paying (or serves the route unpaid); without it, when no check failed.
+  // With --min-score, a run passes when the score reaches it, no check failed in a way that stops
+  // buyers paying (or serves the route unpaid), and every run reached the 402; without it, when no
+  // check failed.
   const gate = (score: number, reports: SellCheckReport[]): Gate | undefined =>
-    minScore === undefined ? undefined : { minScore, score, blocking: reports.reduce((n, r) => n + blockingFailures(r.checks), 0) };
+    minScore === undefined
+      ? undefined
+      : { minScore, score, blocking: reports.reduce((n, r) => n + blockingFailures(r.checks), 0), unreached: reports.filter(stoppedBefore402).length };
   const shared: Omit<SellCheckOptions, 'url' | 'method' | 'price' | 'pay'> = {
     openapi,
     openapiCache: new Map() as OpenApiCache,
@@ -273,16 +276,23 @@ interface Gate {
   score: number;
   /** Failed checks that stop buyers paying or serve the route unpaid (see sellCheckScore). */
   blocking: number;
+  /** Runs that stopped before the 402 (a free quota not used up), so the 402 was never checked. */
+  unreached: number;
 }
 
+/** A run that never reached the 402 fails like a blocking failure: nothing showed that buyers must pay. */
 function gatePasses(g: Gate): boolean {
-  return g.score >= g.minScore && g.blocking === 0;
+  return g.score >= g.minScore && g.blocking === 0 && g.unreached === 0;
 }
 
-/** `minimum 80: passed`, or why it failed: `minimum 80: FAILED, 1 blocking failure`. */
+/** `minimum 80: passed`, or why it failed: `minimum 80: FAILED, 1 blocking failure` or `…, 402 not reached`. */
 function gateText(g: Gate, failed = 'FAILED'): string {
   if (gatePasses(g)) return `minimum ${g.minScore}: passed`;
-  return `minimum ${g.minScore}: ${failed}${g.blocking > 0 ? `, ${g.blocking} blocking failure${g.blocking === 1 ? '' : 's'}` : ''}`;
+  const why = [
+    g.blocking > 0 ? `${g.blocking} blocking failure${g.blocking === 1 ? '' : 's'}` : undefined,
+    g.unreached > 0 ? `402 not reached${g.unreached === 1 ? '' : ` on ${g.unreached} routes`} (free quota not used up)` : undefined,
+  ].filter(Boolean);
+  return `minimum ${g.minScore}: ${failed}${why.map((w) => `, ${w}`).join('')}`;
 }
 
 /** CI is set, or GITHUB_ACTIONS is: anything but empty, `0` or `false`. Then sell check refuses --pay. */

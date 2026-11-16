@@ -683,6 +683,34 @@ describe('radius-cli sell check', () => {
       expect(zero.code).toBe(1);
     });
 
+    it('--min-score fails a run that never reached the 402 (a free quota not used up), whatever the minimum', async () => {
+      // Every unpaid request is served 200 with RateLimit headers: a free quota too large to use up.
+      const fac = await facilitator(radiusKinds);
+      const base = await seller({ facilitator: { url: fac.url } }, () => Response.json({ free: true }, { headers: { 'RateLimit-Limit': '1000', 'RateLimit-Remaining': '999', 'RateLimit-Reset': '60' } }));
+      const url = `${base}/api/report`;
+      const summary = join(mkdtempSync(join(tmpdir(), 'sell-check-')), 'summary.md');
+      writeFileSync(summary, '');
+      const fifty = await cli({ GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary }, 'sell', 'check', url, '--facilitator', fac.url, '--min-score', '50');
+      expect(fifty.stdout).toMatch(/ {2}warn {2} -5 {2}free-quota: .*so the 402 was not checked/);
+      expect(fifty.stdout).toMatch(/^score: 50\/100 \(minimum 50: FAILED, 402 not reached \(free quota not used up\)\)$/m);
+      expect(fifty.code).toBe(1);
+      expect(readFileSync(summary, 'utf8')).toMatch(/### radius-cli sell check: 50\/100 \(minimum 50: failed, 402 not reached \(free quota not used up\)\)/);
+      const zero = await cli({}, 'sell', 'check', url, '--facilitator', fac.url, '--min-score', '0');
+      expect(zero.code).toBe(1);
+      // With --free-requests 0 the quota is only information, and the run still fails the gate.
+      const info = await cli({}, 'sell', 'check', url, '--free-requests', '0', '--min-score', '0');
+      expect(info.stdout).toMatch(/^score: 50\/100 \(minimum 0: FAILED, 402 not reached \(free quota not used up\)\)$/m);
+      expect(info.code).toBe(1);
+      // Without --min-score the exit code is unchanged: no check failed.
+      expect((await cli({}, 'sell', 'check', url, '--facilitator', fac.url)).code).toBe(0);
+      // Every route of a pricing.md: the route that stopped at the free quota fails the gate too.
+      const pricing = join(mkdtempSync(join(tmpdir(), 'sell-check-')), 'pricing.md');
+      writeFileSync(pricing, `## Reports\n- Base URL: ${base}\n### Report\n- Request: \`GET /api/report\`\n- Price: $0.001 / request\n`);
+      const routes = await cli({}, 'sell', 'check', '--pricing', pricing, '--facilitator', fac.url, '--min-score', '0');
+      expect(routes.stdout).toMatch(/^score: 50\/100 \(minimum 0: FAILED, 402 not reached \(free quota not used up\)\) \(the lowest route score\)$/m);
+      expect(routes.code).toBe(1);
+    });
+
     it('on GitHub Actions emits annotations and a step summary; --json keeps stdout JSON; CI alone prints none', async () => {
       const { fac, url } = await answering(500);
       const summary = join(mkdtempSync(join(tmpdir(), 'sell-check-')), 'summary.md');
