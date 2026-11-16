@@ -10,8 +10,9 @@
  *      `llms-full.txt`, resolves to a file in the build.
  *
  * Twins are the mirrored `/<path>.md` files written by
- * `scripts/postbuild-static-markdown.ts`. Generated skills (`/skills/`) and the
- * Vocs source copies (`/assets/md/`) are not twins and are skipped.
+ * `scripts/postbuild-static-markdown.ts`. Generated skills (`/skills/`, the
+ * SKILL.md copies under `/.well-known/`) and the Vocs source copies
+ * (`/assets/md/`) are not twins and are skipped.
  *
  * Usage: tsx scripts/validate-agent-markdown.ts [buildDir]
  */
@@ -21,7 +22,7 @@ import { join, relative } from 'node:path';
 
 const PROJECT_ROOT = join(import.meta.dirname ?? __dirname, '..');
 const DOCS_BASE_URL = 'https://docs.radiustech.xyz';
-const SKIPPED_DIRS = new Set(['assets', 'skills']);
+const SKIPPED_DIRS = new Set(['assets', 'skills', '.well-known']);
 
 const UNPARSED_CALLOUT = /^\\?:::/m;
 const SITE_MD_LINK = new RegExp(

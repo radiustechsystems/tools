@@ -30,7 +30,11 @@ live outside `packages/*`. The plugin has its own version in
 and does not enter the npm Changesets release flow. Each version bump adds an entry to
 [`plugins/radius/CHANGELOG.md`](plugins/radius/CHANGELOG.md), which the docs release notes are built from. The marketplace's
 `metadata.version` describes the catalog, not the plugin; the marketplace entry
-does not duplicate the plugin version.
+does not duplicate the plugin version. The docs build publishes every skill with an
+Agent Skills Discovery index of SHA-256 digests under
+`https://docs.radiustech.xyz/.well-known/agent-skills/`; the
+[`.well-known`](https://github.com/radiustechsystems/.well-known) repo mirrors
+the index on `radiustech.xyz`, synced from `main`.
 
 `radiustechsystems/tools` is the canonical source for all Radius skills and new
 installs. The legacy `skills` repository (also reached through `radius-dev-skill`)
