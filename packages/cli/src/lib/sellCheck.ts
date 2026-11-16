@@ -24,6 +24,8 @@ import {
 import { createRadiusFetch, getPaymentReceipt, RadiusPaymentError, type PaymentOffer, type PaymentProtocol, type PaymentReceipt } from 'radius-sdk/client';
 import { RadiusFacilitatorClient } from 'radius-sdk/server';
 import { decidePayment } from './payPolicy.js';
+import { lintOpenApi, type OpenApiCache, type OpenApiSource } from './sellCheckDiscovery.js';
+import { scoreChecks } from './sellCheckScore.js';
 
 export type CheckStatus = 'pass' | 'warn' | 'fail' | 'skip' | 'info';
 
@@ -32,6 +34,10 @@ export interface Check {
   id: string;
   status: CheckStatus;
   message: string;
+  /** Overrides whether a failure of this check is blocking for the score (see sellCheckScore). */
+  blocking?: boolean;
+  /** Points this check cost the score, when it cost any. */
+  deduction?: number;
 }
 
 export interface OfferSummary {
@@ -64,6 +70,8 @@ export interface SellCheckReport {
   freeQuota?: FreeQuota;
   checks: Check[];
   summary: Record<CheckStatus, number>;
+  /** 0 to 100, from the checks (see sellCheckScore for the rubric). */
+  score: number;
 }
 
 /** What the RateLimit headers of the free (2xx) unpaid answers said, and how many there were. */
@@ -105,6 +113,18 @@ export interface SellCheckOptions {
    * `RateLimit-Remaining` fits: remaining + 1 requests. 0 reports the quota without spending it.
    */
   freeRequests?: number;
+  /**
+   * Also send the request with a malformed payment credential (one per protocol the 402 offers) and
+   * check the seller answers 402, not 5xx or 2xx (default true). Never pays.
+   */
+  probeMalformed?: boolean;
+  /**
+   * Where to read the seller's OpenAPI document for the discovery lint: a URL, or a parsed document
+   * with its source. Default: `/openapi.json` on the URL's origin. `false` skips the lint.
+   */
+  openapi?: string | OpenApiSource | false;
+  /** Shares OpenAPI fetches between runs (sell check --pricing checks many routes of one origin). */
+  openapiCache?: OpenApiCache;
   /** Make one paid request. */
   pay?: {
     networks: PaymentNetwork[];
@@ -227,11 +247,12 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
   const timeoutMs = options.timeoutMs ?? 15_000;
   const baseFetch = withTimeout(options.fetch ?? globalThis.fetch, timeoutMs);
   const checks: Check[] = [];
-  const add = (id: string, status: CheckStatus, message: string) => checks.push({ id, status, message });
-  const report: SellCheckReport = { url: options.url, method, ok: false, status: null, offers: [], mpp: [], facilitators: {}, checks, summary: { pass: 0, warn: 0, fail: 0, skip: 0, info: 0 } };
+  const add = (id: string, status: CheckStatus, message: string, blocking?: boolean) => checks.push(blocking === undefined ? { id, status, message } : { id, status, message, blocking });
+  const report: SellCheckReport = { url: options.url, method, ok: false, status: null, offers: [], mpp: [], facilitators: {}, checks, summary: { pass: 0, warn: 0, fail: 0, skip: 0, info: 0 }, score: 0 };
   const finish = (): SellCheckReport => {
     for (const c of checks) report.summary[c.status]++;
     report.ok = report.summary.fail === 0;
+    report.score = scoreChecks(checks, report.status === 402);
     return report;
   };
 
@@ -561,7 +582,37 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
     else add(`buyer.${protocol}`, 'fail', `a radius-sdk buyer refuses it: ${selected.code}: ${selected.message}`);
   }
 
-  // 8. HEAD: a router answers HEAD with the GET handler; servers that match route verbs exactly (@x402/core
+  // 8. A malformed credential must get a 402 (a fresh challenge), not a crash and not the resource.
+  if (options.probeMalformed !== false) {
+    const probes: { protocol: string; header: string; value: string }[] = [];
+    if (pr) {
+      probes.push(pr.x402Version === 1
+        ? { protocol: 'x402', header: 'X-PAYMENT', value: MALFORMED_CREDENTIAL }
+        : { protocol: 'x402', header: 'PAYMENT-SIGNATURE', value: MALFORMED_CREDENTIAL });
+    }
+    if (mppChallenges.length > 0) probes.push({ protocol: 'mpp', header: 'Authorization', value: `Payment ${MALFORMED_CREDENTIAL}` });
+    for (const probe of probes) {
+      const r = request();
+      r.headers.set(probe.header, probe.value);
+      const sent = `an unpaid ${method} with a malformed ${probe.header}${probe.protocol === 'mpp' ? ': Payment' : ''} credential`;
+      let res: Response;
+      try {
+        res = await baseFetch(r);
+      } catch (e) {
+        add(`credentials.${probe.protocol}`, 'warn', `${sent} failed: ${(e as Error).message}`);
+        continue;
+      }
+      await res.arrayBuffer().catch(() => undefined);
+      const id = `credentials.${probe.protocol}`;
+      const fresh = probe.protocol === 'x402' ? res.headers.has('payment-required') : parseMppChallenges(res.headers.get('www-authenticate')).length > 0;
+      if (res.status === 402) add(id, 'pass', `${sent} answers 402${fresh ? ' with a fresh challenge' : ''}`);
+      else if (res.status >= 200 && res.status < 300) add(id, 'fail', `${sent} answered ${res.status}: the route is served without a valid payment; verify every credential before running the handler`, true);
+      else if (res.status >= 500) add(id, 'fail', `${sent} answered ${res.status}: a bad credential crashes the seller; answer 402 with a fresh challenge so the buyer can pay again (radius-sdk sellers do)`);
+      else add(id, 'warn', `${sent} answered ${res.status}: buyers expect 402 with a fresh challenge, so they can sign again (radius-sdk sellers answer 402)`);
+    }
+  }
+
+  // 9. HEAD: a router answers HEAD with the GET handler; servers that match route verbs exactly (@x402/core
   // before 2.29, other x402 servers) run it unpaid.
   if (options.probeHead) {
     try {
@@ -573,7 +624,20 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
     }
   }
 
-  // 9. One real payment.
+  // 10. Discovery: the seller's OpenAPI document lists this priced route with its payment info.
+  if (options.openapi !== false) {
+    for (const c of await lintOpenApi({
+      url: options.url,
+      method,
+      source: options.openapi,
+      x402Offers: x402Offers.map((o) => ({ network: presetFor(o.network), asset: String(o.asset), amount: pr?.x402Version === 1 ? (o as unknown as { maxAmountRequired?: unknown }).maxAmountRequired : o.amount })),
+      hasMpp: mppChallenges.length > 0,
+      fetch: baseFetch,
+      cache: options.openapiCache,
+    })) add(c.id, c.status, c.message);
+  }
+
+  // 11. One real payment.
   if (options.pay) {
     if (checks.some((c) => c.status === 'fail')) add('pay', 'skip', 'not paying: fix the failed checks first');
     else await payOnce(options, method, add, report, timeoutMs);
@@ -581,6 +645,9 @@ export async function checkSeller(options: SellCheckOptions): Promise<SellCheckR
 
   return finish();
 }
+
+/** Sent as the payment credential by the malformed-credential check: not base64 JSON, so nothing can verify it. */
+export const MALFORMED_CREDENTIAL = 'radius-cli-sell-check.malformed-credential';
 
 /** What radius-sdk's buyer selects from the 402 (declining before it signs anything), or its refusal. */
 async function sdkSelects(

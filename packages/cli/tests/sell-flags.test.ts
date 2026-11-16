@@ -25,8 +25,13 @@ async function run(...args: string[]): Promise<{ code: number; stderr: string }>
 }
 
 describe('sell check flag validation', () => {
-  beforeEach(() => { vi.stubGlobal('fetch', () => { throw new Error('no request expected'); }); });
-  afterEach(() => { vi.unstubAllGlobals(); });
+  beforeEach(() => {
+    vi.stubGlobal('fetch', () => { throw new Error('no request expected'); });
+    // This suite runs in CI too, where --pay is refused before the flag errors below.
+    vi.stubEnv('CI', undefined);
+    vi.stubEnv('GITHUB_ACTIONS', undefined);
+  });
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
   const url = 'http://127.0.0.1:9/api/report';
 
   it.each([
@@ -53,10 +58,34 @@ describe('sell check flag validation', () => {
     ['an unreadable --pricing file', ['sell', 'check', '--pricing', '/nonexistent/pricing.md', '--base-url', 'http://127.0.0.1:9'], /--pricing \/nonexistent\/pricing.md: ENOENT/],
     ['a negative --free-requests', ['sell', 'check', url, '--free-requests', '-1'], /--free-requests must be an integer from 0 to 1000/],
     ['a huge --free-requests', ['sell', 'check', url, '--free-requests', '5000'], /--free-requests must be an integer/],
+    ['a non-integer --min-score', ['sell', 'check', url, '--min-score', '80.5'], /--min-score must be an integer from 0 to 100/],
+    ['a --min-score above 100', ['sell', 'check', url, '--min-score', '101'], /--min-score must be an integer from 0 to 100/],
+    ['an unreadable --openapi file', ['sell', 'check', url, '--openapi', '/nonexistent/openapi.json'], /--openapi \/nonexistent\/openapi.json: ENOENT/],
     ['an unreadable --password-file', ['--password-file', '/nonexistent/pw', 'sell', 'check', url], /--password-file: cannot read \/nonexistent\/pw \(ENOENT\)/],
   ])('exits 2 for %s', async (_name, args, message) => {
     const { code, stderr } = await run(...args);
     expect(code).toBe(2);
     expect(stderr).toMatch(message);
+  });
+
+  it.each([
+    ['CI', 'true'],
+    ['CI', '1'],
+    ['GITHUB_ACTIONS', 'true'],
+  ])('refuses --pay (exit 2) when %s=%s', async (name, value) => {
+    vi.stubEnv(name, value);
+    const { code, stderr } = await run('sell', 'check', url, '--pay', '--threshold', '0.01');
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/--pay is refused in CI \(CI or GITHUB_ACTIONS is set\)/);
+  });
+
+  it('does not treat CI=false or an empty CI as CI', async () => {
+    for (const value of ['false', '0', '']) {
+      vi.stubEnv('CI', value);
+      // Gets past the CI rule to the next flag error.
+      const { code, stderr } = await run('sell', 'check', url, '--pay', '--threshold', '0.01', '--networks', 'foo');
+      expect(code).toBe(2);
+      expect(stderr).toMatch(/unknown network 'foo'/);
+    }
   });
 });
