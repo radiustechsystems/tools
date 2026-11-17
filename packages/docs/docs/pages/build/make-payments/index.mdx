@@ -137,7 +137,7 @@ const payFetch = createRadiusFetch({
 });
 ```
 
-`offer.network` and `offer.protocol` tell `onPaymentRequired` where and how an offer pays. See [networks](/reference/radius-sdk#networks) and [MPP](/reference/radius-sdk#mpp) in the reference.
+`offer.network` and `offer.protocol` tell `onPaymentRequired` where and how an offer pays. See [networks](/reference/radius-sdk#networks) and [MPP](/reference/radius-sdk#mpp) in the reference. To pay only over MPP, set `protocols: ['mpp']`; the [MPP example](/build/examples/workshop-playground#run-the-mpp-example) does that against a seller you run locally.
 
 ## Pay from a terminal
 

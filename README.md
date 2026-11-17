@@ -14,7 +14,7 @@ pnpm add radius-sdk @x402/core                  # SDK, seller side (add hono, or
 pnpm add radius-sdk @x402/core @x402/evm viem   # SDK, buyer / agent side
 ```
 
-Runnable SDK examples (seller workers with and without Hono, an Express seller, agent buyer, browser demo dapp) are in [`packages/sdk/examples`](./packages/sdk/examples).
+Runnable SDK examples (seller workers with and without Hono, an Express seller, agent buyer, MPP seller and buyer, browser demo dapp) are in [`packages/sdk/examples`](./packages/sdk/examples).
 
 The [agent payment evaluation framework](docs/agent-payments-evaluation-framework.md) defines adversarial CLI, SDK, agent, and network scenarios with separate payment, delivery, and reconciliation evidence.
 
