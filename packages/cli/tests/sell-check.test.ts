@@ -40,10 +40,12 @@ async function facilitator(kinds: [string, string][], extensions = ['eip2612GasS
       send({ kinds: kinds.map(([network, assetTransferMethod]) => ({ x402Version: 2, scheme: 'exact', network, extra: { assetTransferMethod } })), extensions, signers: {} });
       return;
     }
-    const { paymentRequirements } = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+    const { paymentRequirements, paymentPayload } = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+    // Like a real facilitator, report the address that signed the payment as the payer.
+    const payer = paymentPayload?.payload?.authorization?.from ?? paymentPayload?.payload?.permit2Authorization?.from;
     if (req.url === '/verify') { send({ isValid: true, payer: PAY_TO }); return; }
     state.settles++;
-    send({ success: true, transaction: `0x${String(state.settles).padStart(64, '0')}`, network: paymentRequirements?.network, payer: '0x00000000000000000000000000000000000a11ce' });
+    send({ success: true, transaction: `0x${String(state.settles).padStart(64, '0')}`, network: paymentRequirements?.network, payer });
   });
   const l = await listen(server);
   open.push(l);
