@@ -42,6 +42,8 @@ const EXPORT_NAMES: Record<string, string> = {
   'radius-testnet': 'radiusTestnet',
   base: 'baseMainnet',
   'base-sepolia': 'baseSepolia',
+  tempo: 'tempoMainnet',
+  'tempo-moderato': 'tempoModerato',
 };
 
 /** Preset id → alias (`radius` → `mainnet`). */

@@ -70,6 +70,12 @@ export interface PaymentNetwork {
    * can be paid in SBC. False for every other chain.
    */
   radius: boolean;
+  /**
+   * Whether the chain has a native coin that `eth_getBalance` reports. False on Tempo, which has
+   * none: fees come out of a stablecoin the account holds (the payment asset will do) and
+   * `eth_getBalance` returns a placeholder. True for every other chain.
+   */
+  nativeBalance: boolean;
   /** Names x402 v1 challenges use for this network instead of CAIP-2 (e.g. `base`). */
   v1Names: readonly string[];
   /**
@@ -119,6 +125,32 @@ export const baseSepoliaChain: Chain = {
   testnet: true,
 };
 
+/**
+ * Tempo (id 4217), Stripe and Paradigm's payments chain. Plain values on purpose: viem's `tempo`
+ * carries Tempo's own transaction serializers, which plain EIP-1559 transactions (what x402
+ * facilitators send) don't need. Tempo has no native coin: fees are deducted in a stablecoin,
+ * priced in 10^-18 USD per gas, so the 18-decimal "native currency" keeps fee arithmetic in
+ * dollars; `eth_getBalance` is a placeholder there.
+ */
+export const tempoChain: Chain = {
+  id: 4217,
+  name: 'Tempo',
+  nativeCurrency: { name: 'USD', symbol: 'USD', decimals: 18 },
+  rpcUrls: { default: { http: ['https://rpc.tempo.xyz'] } },
+  blockExplorers: { default: { name: 'Tempo Explorer', url: 'https://explore.tempo.xyz' } },
+  testnet: false,
+};
+
+/** Tempo Moderato (id 42431), Tempo's testnet. Its faucet is the `tempo_fundAddress` RPC method. */
+export const tempoModeratoChain: Chain = {
+  id: 42_431,
+  name: 'Tempo Moderato',
+  nativeCurrency: { name: 'USD', symbol: 'USD', decimals: 18 },
+  rpcUrls: { default: { http: ['https://rpc.moderato.tempo.xyz'] } },
+  blockExplorers: { default: { name: 'Tempo Moderato Explorer', url: 'https://explore.testnet.tempo.xyz' } },
+  testnet: true,
+};
+
 /** SBC is deployed deterministically: same address on Radius mainnet and testnet. */
 export const SBC: PaymentAsset = {
   address: '0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb',
@@ -146,13 +178,26 @@ export const USDC_BASE_SEPOLIA: PaymentAsset = {
   version: '2',
 };
 
+/**
+ * OUSD (OpenUSD) on Tempo: a TIP-20 stablecoin at the same address on Tempo and Moderato, with
+ * EIP-2612 permit (its EIP-712 name is its `name()`, version "1") and no EIP-3009, so payments
+ * in it are Permit2 with gas sponsoring.
+ */
+export const OUSD: PaymentAsset = {
+  address: '0x20c0000000000000000000006a37da5c996874be',
+  symbol: 'OUSD',
+  decimals: 6,
+  name: 'OpenUSD',
+  version: '1',
+};
+
 /** Canonical Uniswap Permit2 (same address on every EVM chain). */
 export const PERMIT2_ADDRESS: Address = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
 /** x402ExactPermit2Proxy — the Permit2 spender payers sign for in the `exact` scheme. */
 export const X402_EXACT_PERMIT2_PROXY: Address = '0x402085c248EeA27D92E8b30b2C58ed07f9E20001';
 
 /** Preset ids, in `PRESET_NETWORKS` order. */
-export const PRESET_NAMES = ['radius', 'radius-testnet', 'base', 'base-sepolia'] as const;
+export const PRESET_NAMES = ['radius', 'radius-testnet', 'base', 'base-sepolia', 'tempo', 'tempo-moderato'] as const;
 /** A preset id proper (no aliases). */
 export type PresetName = (typeof PRESET_NAMES)[number];
 /** Alternative names for presets: `mainnet` / `testnet` are Radius mainnet / testnet. */
@@ -175,6 +220,8 @@ export interface PaymentNetworkConfig {
   faucetUrl?: string;
   /** Radius semantics (see `PaymentNetwork.radius`). Default false. */
   radius?: boolean;
+  /** Whether `eth_getBalance` means anything here (see `PaymentNetwork.nativeBalance`). Default true. */
+  nativeBalance?: boolean;
   /** x402 v1 network names (see `PaymentNetwork.v1Names`). */
   v1Names?: readonly string[];
   /** The preset in the other tier (see `PaymentNetwork.counterpart`). */
@@ -210,6 +257,7 @@ export function definePaymentNetwork(config: PaymentNetworkConfig): PaymentNetwo
     faucetUrl: config.faucetUrl,
     asset: config.asset,
     radius: config.radius ?? false,
+    nativeBalance: config.nativeBalance ?? true,
     v1Names: config.v1Names ?? [],
     counterpart: config.counterpart,
   });
@@ -253,8 +301,26 @@ export const baseSepolia: PaymentNetwork = definePaymentNetwork({
   counterpart: 'base',
 });
 
+export const tempoMainnet: PaymentNetwork = definePaymentNetwork({
+  chain: tempoChain,
+  name: 'tempo',
+  facilitatorUrl: 'https://facilitator.radiustech.xyz',
+  asset: OUSD,
+  nativeBalance: false,
+  counterpart: 'tempo-moderato',
+});
+
+export const tempoModerato: PaymentNetwork = definePaymentNetwork({
+  chain: tempoModeratoChain,
+  name: 'tempo-moderato',
+  facilitatorUrl: 'https://facilitator.testnet.radiustech.xyz',
+  asset: OUSD,
+  nativeBalance: false,
+  counterpart: 'tempo',
+});
+
 /** Every preset, Radius first (the order of `PRESET_NAMES`). */
-export const PRESET_NETWORKS: readonly PaymentNetwork[] = [radiusMainnet, radiusTestnet, baseMainnet, baseSepolia];
+export const PRESET_NETWORKS: readonly PaymentNetwork[] = [radiusMainnet, radiusTestnet, baseMainnet, baseSepolia, tempoMainnet, tempoModerato];
 
 const PRESETS_BY_NAME = presetsByName();
 
@@ -309,6 +375,7 @@ export function resolveNetwork(input?: NetworkInput, overrides?: NetworkOverride
     faucetUrl: overrides?.faucetUrl ?? base.faucetUrl,
     asset: overrides?.asset ? { ...base.asset, ...overrides.asset } : base.asset,
     radius: base.radius,
+    nativeBalance: base.nativeBalance,
     v1Names: base.v1Names,
     counterpart: base.counterpart,
   });
@@ -340,7 +407,16 @@ export function explorerTxUrl(network: PaymentNetwork, txHash: string): string |
 /** Assemble a PaymentNetwork whose convenience fields are derived from `chain`. */
 function fromChain(
   chain: Chain,
-  rest: { name?: string; facilitatorUrl?: string; faucetUrl?: string; asset: PaymentAsset; radius: boolean; v1Names: readonly string[]; counterpart?: PresetName },
+  rest: {
+    name?: string;
+    facilitatorUrl?: string;
+    faucetUrl?: string;
+    asset: PaymentAsset;
+    radius: boolean;
+    nativeBalance: boolean;
+    v1Names: readonly string[];
+    counterpart?: PresetName;
+  },
 ): PaymentNetwork {
   return {
     name: rest.name ?? chain.name,
@@ -354,6 +430,7 @@ function fromChain(
     asset: rest.asset,
     testnet: chain.testnet ?? false,
     radius: rest.radius,
+    nativeBalance: rest.nativeBalance,
     v1Names: rest.v1Names,
     ...(rest.counterpart ? { counterpart: rest.counterpart } : {}),
   };

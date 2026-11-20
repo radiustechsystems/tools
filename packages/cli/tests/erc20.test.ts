@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createPublicClient, custom, decodeFunctionData, erc20Abi, encodeAbiParameters, numberToHex, type Address, type Hex } from 'viem';
-import { radiusTestnetChain, SBC } from 'radius-sdk';
+import { baseSepoliaChain, OUSD, radiusTestnetChain, SBC, tempoModeratoChain, USDC_BASE_SEPOLIA } from 'radius-sdk';
 import { formatBalanceLines, parseAmountArg, parseTokenArg, readBalances, sbcToken, type BalanceReport } from '../src/lib/erc20.js';
 import type { ResolvedConfig } from '../src/types.js';
 
@@ -74,54 +74,103 @@ describe('readBalances', () => {
     const r = await readBalances(client, cfg, OWNER);
     expect(r).toEqual({
       address: OWNER,
+      network: 'radius-testnet',
       totalUsd: 12.345678,
-      sbc: '10',
-      rusd: '2.345678',
-      sbcWei: '10000000',
-      rusdWei: '2345678000000000000',
-      aggregateWei: '12345678000000000000',
-      rusdSource: 'evm',
-      sbcError: null,
+      asset: { symbol: 'SBC', address: SBC.address, formatted: '10', atomic: '10000000', error: null },
+      native: { symbol: 'RUSD', formatted: '2.345678', wei: '2345678000000000000', aggregateWei: '12345678000000000000', source: 'evm' },
     });
   });
   it('falls back to the aggregate balance, with the error, when the SBC read fails', async () => {
     const client = readNode({ native: 1_000_000_000_000_000_000n, sbc: 5_000_000n, sbcFails: true });
     const r = await readBalances(client, cfg, OWNER);
-    expect(r.sbcError).toMatch(/execution reverted/);
-    expect(r.rusdSource).toBe('aggregate');
-    expect(r.rusd).toBe('6');
-    expect(r.rusdWei).toBe('6000000000000000000');
-    expect(r.sbc).toBe('0');
+    expect(r.asset.error).toMatch(/execution reverted/);
+    expect(r.native).toMatchObject({ source: 'aggregate', formatted: '6', wei: '6000000000000000000' });
+    expect(r.asset.formatted).toBe('0');
     expect(r.totalUsd).toBe(6);
+  });
+
+  /** A plain EVM node holding `token` units of one ERC-20 and `native` wei; counts the RPC methods it got. */
+  function plainNode(chain: typeof baseSepoliaChain, opts: { native: bigint; token: bigint }) {
+    const methods: string[] = [];
+    const transport = custom(
+      {
+        async request({ method, params }: { method: string; params?: unknown[] }) {
+          methods.push(method);
+          const p = (params ?? []) as never[];
+          switch (method) {
+            case 'eth_chainId':
+              return numberToHex(chain.id);
+            case 'eth_getBalance':
+              return numberToHex(opts.native);
+            case 'eth_call': {
+              const tx = p[0] as { to?: Address; data?: Hex };
+              const { functionName } = decodeFunctionData({ abi: erc20Abi, data: tx.data! });
+              if (functionName === 'balanceOf') return word(opts.token);
+              throw new Error(`unexpected view ${functionName}`);
+            }
+            default:
+              throw new Error(`unexpected RPC method ${method}`);
+          }
+        },
+      },
+      { retryCount: 0 },
+    );
+    return { client: createPublicClient({ chain, transport }), methods };
+  }
+
+  it("reads another network's own asset and native coin, ignoring --sbc", async () => {
+    const { client } = plainNode(baseSepoliaChain, { native: 500_000_000_000_000n, token: 2_500_000n });
+    const r = await readBalances(client, { ...cfg, network: 'base-sepolia', chain: baseSepoliaChain, sbcAddress: CUSTOM_SBC }, OWNER);
+    expect(r).toEqual({
+      address: OWNER,
+      network: 'base-sepolia',
+      totalUsd: 2.5,
+      asset: { symbol: 'USDC', address: USDC_BASE_SEPOLIA.address, formatted: '2.5', atomic: '2500000', error: null },
+      native: { symbol: 'ETH', formatted: '0.0005', wei: '500000000000000', aggregateWei: '500000000000000', source: 'aggregate' },
+    });
+  });
+
+  it('never asks a chain without a native coin (Tempo) for eth_getBalance', async () => {
+    const { client, methods } = plainNode(tempoModeratoChain, { native: 0x4242n, token: 1_250_000n });
+    const r = await readBalances(client, { ...cfg, network: 'tempo-moderato', chain: tempoModeratoChain }, OWNER);
+    expect(r).toEqual({
+      address: OWNER,
+      network: 'tempo-moderato',
+      totalUsd: 1.25,
+      asset: { symbol: 'OUSD', address: OUSD.address, formatted: '1.25', atomic: '1250000', error: null },
+      native: null,
+    });
+    expect(methods).not.toContain('eth_getBalance');
   });
 });
 
 describe('formatBalanceLines', () => {
   const report: BalanceReport = {
     address: OWNER,
+    network: 'radius-testnet',
     totalUsd: 0.159963,
-    sbc: '0.030002',
-    rusd: '0.129961',
-    sbcWei: '30002',
-    rusdWei: '129961000000000000',
-    aggregateWei: '159963000000000000',
-    rusdSource: 'evm',
-    sbcError: null,
+    asset: { symbol: 'SBC', address: SBC.address, formatted: '0.030002', atomic: '30002', error: null },
+    native: { symbol: 'RUSD', formatted: '0.129961', wei: '129961000000000000', aggregateWei: '159963000000000000', source: 'evm' },
   };
 
   it('prints one greppable line per asset and the total', () => {
     expect(formatBalanceLines(report)).toEqual([
       `Address: ${OWNER}`,
-      'SBC:     0.030002 SBC',
-      'RUSD:    0.129961 RUSD',
-      'Total:   0.159963 USD',
+      'SBC:   0.030002 SBC',
+      'RUSD:  0.129961 RUSD',
+      'Total: 0.159963 USD',
     ]);
   });
 
-  it('marks SBC unavailable when its read failed, keeping a multi-line error to its first line', () => {
-    const sbcError = 'HTTP request failed.\n\nURL: https://rpc.example\nRequest body: {}';
-    const lines = formatBalanceLines({ ...report, sbcError });
+  it('marks the asset unavailable when its read failed, keeping a multi-line error to its first line', () => {
+    const error = 'HTTP request failed.\n\nURL: https://rpc.example\nRequest body: {}';
+    const lines = formatBalanceLines({ ...report, asset: { ...report.asset, error } });
     expect(lines).toHaveLength(4);
-    expect(lines[1]).toBe('SBC:     unavailable (HTTP request failed.)');
+    expect(lines[1]).toBe('SBC:   unavailable (HTTP request failed.)');
+  });
+
+  it('leaves the native line out on a chain without a native coin', () => {
+    const tempo: BalanceReport = { ...report, network: 'tempo-moderato', asset: { ...report.asset, symbol: 'OUSD', address: OUSD.address }, native: null, totalUsd: 0.030002 };
+    expect(formatBalanceLines(tempo)).toEqual([`Address: ${OWNER}`, 'OUSD:  0.030002 OUSD', 'Total: 0.030002 USD']);
   });
 });
