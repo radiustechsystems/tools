@@ -21,6 +21,11 @@ import {
   SBC,
   USDC_BASE,
   USDC_BASE_SEPOLIA,
+  OUSD,
+  tempoChain,
+  tempoMainnet,
+  tempoModerato,
+  tempoModeratoChain,
 } from '../src/networks.js';
 
 describe('viem chains', () => {
@@ -66,6 +71,21 @@ describe('viem chains', () => {
     // The EIP-712 domains differ between the two USDC deployments.
     expect(USDC_BASE).toMatchObject({ address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', name: 'USD Coin', version: '2', decimals: 6 });
     expect(USDC_BASE_SEPOLIA).toMatchObject({ address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', name: 'USDC', version: '2', decimals: 6 });
+  });
+});
+
+describe('Tempo presets', () => {
+  it('describe Tempo and Moderato, paying in OUSD by permit, with no native coin', () => {
+    expect(tempoChain).toMatchObject({ id: 4217, nativeCurrency: { symbol: 'USD', decimals: 18 }, rpcUrls: { default: { http: ['https://rpc.tempo.xyz'] } } });
+    expect(tempoModeratoChain).toMatchObject({ id: 42431, testnet: true, rpcUrls: { default: { http: ['https://rpc.moderato.tempo.xyz'] } } });
+    expect(tempoMainnet).toMatchObject({ name: 'tempo', network: 'eip155:4217', asset: OUSD, radius: false, nativeBalance: false, testnet: false, v1Names: [], facilitatorUrl: 'https://facilitator.radiustech.xyz' });
+    expect(tempoModerato).toMatchObject({ name: 'tempo-moderato', network: 'eip155:42431', asset: OUSD, nativeBalance: false, testnet: true, facilitatorUrl: 'https://facilitator.testnet.radiustech.xyz' });
+    expect(OUSD).toMatchObject({ address: '0x20c0000000000000000000006a37da5c996874be', name: 'OpenUSD', version: '1', decimals: 6 });
+    expect(counterpartOf(tempoMainnet)).toBe(tempoModerato);
+    expect(presetForChainId(42431)).toBe(tempoModerato);
+    // Every other chain has a native coin.
+    for (const n of [radiusMainnet, radiusTestnet, baseMainnet, baseSepolia]) expect(n.nativeBalance).toBe(true);
+    expect(definePaymentNetwork({ chain: baseChain, asset: USDC_BASE }).nativeBalance).toBe(true);
   });
 });
 

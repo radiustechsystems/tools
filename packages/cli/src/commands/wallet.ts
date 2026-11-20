@@ -299,7 +299,7 @@ export function registerWallet(program: Command): void {
 
   wallet
     .command('balance')
-    .description('Show RUSD (native) and SBC balances for an address (defaults to own)')
+    .description("Show the network's asset (SBC, USDC, OUSD) and native balances for an address (defaults to own)")
     .argument('[address]', 'address to query (defaults to own)')
     .action(async (addressArg: string | undefined, _subOpts, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
