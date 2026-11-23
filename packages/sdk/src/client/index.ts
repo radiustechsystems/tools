@@ -9,9 +9,9 @@ import { toTokenAtomic, type TokenAmount, type TxResult } from '../erc20.js';
 import { RadiusPaymentError } from '../errors.js';
 import { describeSupportedSchemes } from '../schemes.js';
 import { PERMIT2_ADDRESS, explorerTxUrl, isNetworkId, overridesOf, resolveNetwork, type Address, type NetworkInput, type NetworkName, type NetworkOverrides, type PaymentNetwork } from '../networks.js';
-import { decodeMppReceipt, decodePaymentReceipt, parseUptoSettlementAmount, type PaymentReceipt } from '../receipt.js';
+import { decodeMppReceipt, decodePaymentReceipt, validatePaymentReceipt, type InvalidReceiptDetails, type PaymentReceipt } from '../receipt.js';
 import { MPP_INTENT, MPP_METHOD, MPP_RECEIPT_HEADER, mppChallengeNonce, mppSource, parseMppChallenges, serializeMppCredential, type MppChallenge } from '../mpp.js';
-import { getSettlement, type Settlement } from '../settlement.js';
+import { getSettlement, reconcilePayment, type PaymentReconciliation, type ReconcileOffer, type ReconcileOptions, type Settlement } from '../settlement.js';
 
 /**
  * Who pays: a private key, a viem local account (or any `{ address, signTypedData }`),
@@ -157,7 +157,12 @@ export interface RadiusFetchOptions extends NetworkOverrides {
    * which). Return false to decline (`declined` error carrying the request).
    */
   onApprovalRequired?: (request: ApprovalRequest) => boolean | Promise<boolean>;
-  /** Called with the decoded receipt after a paid response. */
+  /**
+   * Called with the receipt after a paid response, once it has been checked against the offer
+   * (network, payer, transaction format, amount rules; else `invalid_receipt`). The receipt is the
+   * server's report: `receipt.charge` separates the authorised maximum from the reported charge, and
+   * `payFetch.reconcilePayment(receipt, offer)` checks the chain.
+   */
   onPaid?: (receipt: PaymentReceipt, offer: PaymentOffer) => void | Promise<void>;
   /** Underlying fetch (defaults to globalThis.fetch). */
   fetch?: typeof globalThis.fetch;
@@ -213,6 +218,12 @@ export interface RadiusFetch extends NetworkWallet {
   on(network: string | PaymentNetwork): NetworkWallet;
   /** Escape hatch to the underlying x402 client. */
   readonly client: x402Client;
+  /**
+   * Check a receipt against the chain of `offer.network` (see `reconcilePayment`): token, payer
+   * (this wallet unless `options.payer`), recipient and amount. Resolves `unresolved` when the
+   * evidence is not available yet; never throws for that.
+   */
+  reconcilePayment(receipt: PaymentReceipt, offer: ReconcileOffer, options?: ReconcileOptions): Promise<PaymentReconciliation>;
 }
 
 const ERC20_ABI = [
@@ -779,28 +790,28 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
   };
 
   /**
-   * Decode the settlement receipt. For `upto` the reported `amount` is untrusted input: it must be a
-   * non-negative integer no greater than the signed maximum, else `invalid_receipt`. `exact` receipts
-   * are decoded leniently (a malformed one just means no receipt).
+   * Decode the settlement receipt and check it against the offer (`validatePaymentReceipt`): the
+   * network, this wallet as payer, the transaction format and the scheme's amount rules. A receipt
+   * that decodes but fails a check is `invalid_receipt` (details: `InvalidReceiptDetails`, with the
+   * unread `response` that carries the paid content: after a redirect, the followed one). A header that does not decode at all is `invalid_receipt` for `upto` and no
+   * receipt for `exact`. A successful `upto` receipt without an amount is incomplete evidence, never
+   * the authorised maximum.
    */
-  const decodeReceipt = (header: string, offer: X402Offer): PaymentReceipt | undefined => {
-    let receipt: PaymentReceipt;
+  const decodeReceipt = (header: string, offer: X402Offer, response: Response): PaymentReceipt | undefined => {
     try {
-      receipt = decodePaymentReceipt(header, offer.network);
+      const decoded = decodePaymentReceipt(header, offer.network);
+      return validatePaymentReceipt(decoded, { scheme: offer.scheme, amount: offer.amount, network: offer.network, asset: offer.asset, payer: account.address });
     } catch (e) {
-      if (offer.scheme === 'upto') throw new RadiusPaymentError('invalid_receipt', `Invalid upto payment response: ${(e as Error).message}`, e);
+      if (e instanceof RadiusPaymentError && e.code === 'invalid_receipt') {
+        const details: InvalidReceiptDetails = { ...(e.details as InvalidReceiptDetails), response };
+        throw new RadiusPaymentError('invalid_receipt', `Invalid ${offer.scheme} payment response: ${e.message.replace(/^Invalid payment response: /, '')}`, details);
+      }
+      if (offer.scheme === 'upto') {
+        const details: InvalidReceiptDetails = { reason: 'malformed', response, cause: e };
+        throw new RadiusPaymentError('invalid_receipt', `Invalid upto payment response: ${(e as Error).message}`, details);
+      }
       return undefined;
     }
-    if (offer.scheme === 'upto' && receipt.amount !== undefined) {
-      try {
-        parseUptoSettlementAmount(receipt.amount, BigInt(offer.amount));
-      } catch (e) {
-        throw new RadiusPaymentError('invalid_receipt', `Invalid upto payment response: ${(e as Error).message}`, receipt);
-      }
-    }
-    // `exact` settles the offered amount; `upto` facilitators report what they charged (else assume the maximum).
-    if (receipt.success && receipt.amount === undefined) receipt.amount = offer.amount;
-    return receipt;
   };
 
   /**
@@ -920,9 +931,13 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     return settled(second, second, offer);
   };
 
-  /** Report the receipt carried by `paid` (the response to the paid request) and return `result` to the caller. */
+  /**
+   * Report the receipt carried by `paid` (the response to the paid request) and return `result` to the
+   * caller. After a redirect `paid` is the spent 3xx and `result` the followed response with the paid
+   * content, so an `invalid_receipt` error carries `result` (unread) in `details.response`.
+   */
   const settled = async (paid: Response, result: Response, offer: PaymentOffer): Promise<Response> => {
-    const receipt = offer.protocol === 'x402' ? x402Receipt(paid, offer) : mppReceipt(paid, offer);
+    const receipt = offer.protocol === 'x402' ? x402Receipt(paid, offer, result) : mppReceipt(paid, offer);
     if (receipt && options.onPaid) {
       try {
         await options.onPaid(receipt, offer);
@@ -933,9 +948,10 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     return result;
   };
 
-  const x402Receipt = (res: Response, offer: X402Offer): PaymentReceipt | undefined => {
+  /** The receipt on `res`; a failed check reports `content` (the response the caller gets) as `details.response`. */
+  const x402Receipt = (res: Response, offer: X402Offer, content: Response): PaymentReceipt | undefined => {
     const header = res.headers.get('payment-response') ?? res.headers.get('x-payment-response');
-    return header ? decodeReceipt(header, offer) : undefined;
+    return header ? decodeReceipt(header, offer, content) : undefined;
   };
 
   /** `Payment-Receipt` of an MPP payment, completed with what the payer knows: itself, and the amount (a charge settles exactly that). */
@@ -943,7 +959,14 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     const header = res.headers.get(MPP_RECEIPT_HEADER);
     if (!header) return undefined;
     try {
-      return { ...decodeMppReceipt(header, offer.network), payer: getAddress(account.address), amount: offer.amount };
+      return {
+        ...decodeMppReceipt(header, offer.network),
+        payer: getAddress(account.address),
+        amount: offer.amount,
+        asset: offer.asset,
+        decimals: offer.network.asset.decimals,
+        charge: { scheme: 'exact', authorized: offer.amount, evidence: 'implied' },
+      };
     } catch {
       return undefined;
     }
@@ -966,11 +989,13 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     networks,
     on,
     client,
+    reconcilePayment: (receipt: PaymentReceipt, offer: ReconcileOffer, opts: ReconcileOptions = {}) =>
+      reconcilePayment(receipt, offer, { payer: account.address, client: railFor(offer.network)?.publicClient, ...opts }),
   });
 }
 
-export { getSettlement } from '../settlement.js';
-export type { Settlement, SettlementTransfer } from '../settlement.js';
+export { getSettlement, reconcilePayment } from '../settlement.js';
+export type { Settlement, SettlementTransfer, PaymentReconciliation, ReconciliationStatus, ReconciliationReason, ReconcileOffer, ReconcileOptions } from '../settlement.js';
 export { getBalances, getNativeBalance, getAggregateBalance, getTokenBalance, radiusActions, defaultTokens, nativeBalanceBytecode } from '../balances.js';
 export type {
   AccountBalances,
@@ -1057,9 +1082,9 @@ export type {
   Permit2PermitParameters,
   Permit2AllowanceTransferFromParameters,
 } from '../permit2.js';
-export { getPaymentReceipt, decodePaymentReceipt, decodeMppReceipt, parseUptoSettlementAmount } from '../receipt.js';
+export { getPaymentReceipt, decodePaymentReceipt, decodeMppReceipt, parseUptoSettlementAmount, validatePaymentReceipt } from '../receipt.js';
 export type { MppChallenge } from '../mpp.js';
-export type { PaymentReceipt } from '../receipt.js';
+export type { PaymentReceipt, PaymentCharge, ChargeEvidence, ReceiptExpectation, InvalidReceiptReason, InvalidReceiptDetails } from '../receipt.js';
 export { RadiusPaymentError } from '../errors.js';
 export { radiusEnv } from '../env.js';
 export type { RadiusEnvConfig } from '../env.js';
