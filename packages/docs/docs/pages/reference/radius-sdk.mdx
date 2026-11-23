@@ -391,6 +391,8 @@ This is not a drop-in for a server whose MPP rail is Tempo through `mppx`. A Tem
 
 The SDK checks the realm (`mpp.realm`, by default the request's host), the expiry, the route's current price, and the authorization's nonce, which is bound to the challenge. Then the facilitator verifies and settles the payment, before or after the handler as `settle` says. The handler's receipt and `onSettled` have `protocol: 'mpp'`, and the response carries `Payment-Receipt`.
 
+The [MPP example](/build/examples/workshop-playground#run-the-mpp-example) runs a seller and an MPP buyer end to end.
+
 ## Errors
 
 ### Seller responses
