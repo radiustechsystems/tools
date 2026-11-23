@@ -446,6 +446,20 @@ The Radius facilitator also settles on Tempo, in OpenUSD (OUSD; not Origin Dolla
 | EIP-712 domain version | `1`                                          | `1`                                          |
 | Transfer methods       | `permit2`                                    | `permit2`                                    |
 
+Stock x402 clients pay on Tempo without any Radius code: `@x402/fetch` with `@x402/evm` (2.29 or later) and a plain viem account signs the Permit2 authorization and the sponsored permit from the `extra` fields of the requirement, so the first payment from a fresh wallet needs no approval transaction. One setting is required: OUSD is not in the client's built-in asset table, and its spend controls refuse tokens that are not listed there, so add it to `allowedAssets` (the same applies to SBC on Radius mainnet):
+
+```typescript
+import { wrapFetchWithPayment, x402Client } from '@x402/fetch';
+import { ExactEvmScheme, toClientEvmSigner } from '@x402/evm';
+
+const client = new x402Client().register('eip155:4217', new ExactEvmScheme(toClientEvmSigner(account, publicClient))).setSpendControls({
+  allowedAssets: [{ network: 'eip155:4217', asset: '0x20c0000000000000000000006a37da5c996874be' }],
+});
+const fetchWithPay = wrapFetchWithPayment(fetch, client);
+```
+
+OUSD is issued on Tempo by Open Standard through Bridge, and businesses mint and redeem it there or through partners such as BVNK; see [Tempo's announcement](https://tempo.xyz/blog/open-usd-ousd/). On Moderato, the `tempo_fundAddress` JSON-RPC method funds any address with test OUSD.
+
 ## Held payments
 
 A Tempo account can give itself a receive policy (TIP-403) saying which tokens, or which senders, it accepts. A transfer such a policy rejects does not revert: the transaction succeeds, the token credits Tempo's ReceivePolicyGuard (`0xb10c000000000000000000000000000000000000`) instead of the recipient, and the recipient gets nothing.
