@@ -1,9 +1,16 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { generatePrivateKey } from 'viem/accounts';
 import { resolveNetwork } from 'radius-sdk';
 import { radiusPayments, type RadiusPaymentsOptions } from 'radius-sdk/server';
-import { checkSeller, type SellCheckReport } from '../src/lib/sellCheck.js';
+import { checkSeller, readRateLimit, type SellCheckReport } from '../src/lib/sellCheck.js';
+import { checkRoutes } from '../src/lib/sellCheckRoutes.js';
+import { parsePricingMd } from '../src/lib/pricingMd.js';
+import { registerSell } from '../src/commands/sell.js';
+import { Command } from 'commander';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // A real radius-sdk seller over loopback HTTP, a mock facilitator and a mock JSON-RPC node. Nothing
 // leaves the machine; "settlement" is the mock facilitator saying so.
@@ -52,17 +59,17 @@ async function facilitator(kinds: [string, string][], extensions = ['eip2612GasS
 }
 
 /**
- * Serve a radius-sdk seller: `GET /api/report` paid, `GET /health` free. `unpaidHead` answers HEAD
- * before the payment middleware, like a router that dispatches HEAD to the GET handler.
+ * Serve a radius-sdk seller: `GET /api/report` paid, `GET /health` free. `intercept` answers a
+ * request before the seller does (return undefined to pass it on).
  */
-async function seller(options: Partial<RadiusPaymentsOptions>, transform?: (res: Response) => Response | Promise<Response>, unpaidHead = false) {
+async function seller(options: Partial<RadiusPaymentsOptions>, transform?: (res: Response) => Response | Promise<Response>, intercept?: (req: Request) => Response | undefined) {
   const pay = radiusPayments({ network: 'testnet', payTo: PAY_TO, routes: { 'GET /api/report': { price: '$0.001', description: 'Report' } }, ...options } as RadiusPaymentsOptions);
   const app = pay.wrap((request) => (new URL(request.url).pathname === '/health' || new URL(request.url).pathname === '/api/report'
     ? Response.json({ report: 'quarterly-sales' })
     : new Response('not found', { status: 404 })));
   const server = createServer(async (req, res) => {
-    if (unpaidHead && req.method === 'HEAD') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(); return; }
-    let response = await app(new Request(`http://${req.headers.host}${req.url}`, { method: req.method, headers: req.headers as Record<string, string> }));
+    const request = new Request(`http://${req.headers.host}${req.url}`, { method: req.method, headers: req.headers as Record<string, string> });
+    let response = intercept?.(request) ?? await app(request);
     if (transform) response = await transform(response);
     res.writeHead(response.status, Object.fromEntries(response.headers));
     res.end(Buffer.from(await response.arrayBuffer()));
@@ -71,6 +78,16 @@ async function seller(options: Partial<RadiusPaymentsOptions>, transform?: (res:
   open.push(l);
   return l.url;
 }
+
+// The malformed-credential check makes @x402/core warn about each header it cannot decode; that is expected here.
+const consoleWarn = console.warn;
+beforeAll(() => {
+  vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+    if (typeof args[0] === 'string' && args[0].startsWith('Failed to decode PAYMENT-SIGNATURE header')) return;
+    consoleWarn(...args);
+  });
+});
+afterAll(() => { vi.mocked(console.warn).mockRestore(); });
 
 let rpc: Listening;
 beforeAll(async () => {
@@ -113,6 +130,11 @@ describe('radius-cli sell check', () => {
     const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } })}/api/report`, facilitators: [fac.url] });
     expect(report.ok).toBe(true);
     expect(statusOf(report, 'mpp')).toBe('info');
+    // SDK-neutral: says what it means for buyers, and names radius-sdk only as one way to add MPP.
+    const mpp = report.checks.find((c) => c.id === 'mpp')!.message;
+    expect(mpp).toMatch(/buyers can pay over x402 only/);
+    expect(mpp).toMatch(/seller's payment setup \(with radius-sdk: mpp: \{ secretKey \}/);
+    expect(mpp).not.toMatch(/upstream x402 adapters/);
     expect(report.mpp).toEqual([]);
     expect(statusOf(report, 'buyer.mpp')).toBeUndefined();
   });
@@ -162,7 +184,143 @@ describe('radius-cli sell check', () => {
     const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } })}/health`, facilitators: [fac.url] });
     expect(report.ok).toBe(false);
     expect(report.status).toBe(200);
-    expect(report.checks).toEqual([expect.objectContaining({ id: 'status', status: 'fail', message: expect.stringMatching(/served without payment/) })]);
+    expect(report.checks).toEqual([expect.objectContaining({ id: 'status', status: 'fail', message: expect.stringMatching(/served without payment and without RateLimit headers, so it is not a free quota/) })]);
+    expect(report.freeQuota).toBeUndefined();
+  });
+
+  describe('free quotas', () => {
+    /**
+     * A radius-sdk seller behind a free quota of `limit` unpaid requests: each is served 200 with
+     * RateLimit headers, as the Radius Platform's policy sends them; after that the 402 comes through.
+     */
+    async function quotaSeller(limit: number, headers: (remaining: number) => Record<string, string> = (remaining) => ({ 'RateLimit-Limit': String(limit), 'RateLimit-Remaining': String(remaining), 'RateLimit-Reset': '42' })) {
+      const fac = await facilitator(radiusKinds);
+      const counter = { requests: 0 };
+      const url = `${await seller({ facilitator: { url: fac.url } }, (res) => {
+        counter.requests++;
+        if (counter.requests > limit) return res;
+        return Response.json({ free: true }, { headers: headers(limit - counter.requests) });
+      })}/api/report`;
+      return { fac, url, counter };
+    }
+
+    it('reads RateLimit headers, and their X-RateLimit form', () => {
+      expect(readRateLimit(new Headers({ 'RateLimit-Limit': '10', 'RateLimit-Remaining': '9', 'RateLimit-Reset': '50' }))).toEqual({ limit: 10, remaining: 9, resetSeconds: 50 });
+      expect(readRateLimit(new Headers({ 'X-RateLimit-Remaining': '3' }))).toEqual({ remaining: 3, limit: undefined, resetSeconds: undefined });
+      expect(readRateLimit(new Headers({ 'RateLimit-Limit': '10' }))).toBeUndefined();
+      expect(readRateLimit(new Headers({ 'RateLimit-Remaining': 'lots' }))).toBeUndefined();
+    });
+
+    it('uses up the quota, then checks the 402', async () => {
+      const { fac, url, counter } = await quotaSeller(10);
+      const report = await checkSeller({ url, price: '$0.001', facilitators: [fac.url] });
+      expect(failed(report)).toEqual([]);
+      expect(report.ok).toBe(true);
+      expect(report.status).toBe(402);
+      expect(report.freeQuota).toEqual({ limit: 10, remaining: 0, resetSeconds: 42, served: 10, exhausted: true });
+      expect(report.checks.find((c) => c.id === 'free-quota')).toMatchObject({ status: 'info', message: expect.stringMatching(/10 unpaid GET requests were served \(limit 10, 0 remaining, resets in 42 s\), then 402/) });
+      expect(report.checks.find((c) => c.id === 'status')?.message).toMatch(/answers 402 once the free quota is used up/);
+      expect(statusOf(report, 'offer[0].amount')).toBe('pass');
+      // The 10 free answers and the 402, then the malformed-credential probe and /openapi.json: nothing more.
+      expect(counter.requests).toBe(13);
+      // The free quota is information: it costs no points.
+      expect(report.score).toBe(100);
+    });
+
+    it('with --free-requests 0, reports the quota without spending it and does not fail', async () => {
+      const { url, counter } = await quotaSeller(10);
+      const report = await checkSeller({ url, freeRequests: 0 });
+      expect(report.ok).toBe(true);
+      expect(report.status).toBe(200);
+      expect(report.offers).toEqual([]);
+      expect(report.freeQuota).toMatchObject({ limit: 10, remaining: 9, served: 1, exhausted: false });
+      expect(report.checks).toEqual([expect.objectContaining({ id: 'free-quota', status: 'info', message: expect.stringMatching(/a free quota, not used up \(--free-requests 0\), so the 402 was not checked/) })]);
+      expect(counter.requests).toBe(1);
+      // The 402 was never read, so the score is capped.
+      expect(report.score).toBe(50);
+    });
+
+    it('does not start on a quota larger than --free-requests, and warns', async () => {
+      const { url, counter } = await quotaSeller(50);
+      const report = await checkSeller({ url });
+      expect(report.ok).toBe(true);
+      expect(report.checks).toEqual([expect.objectContaining({ id: 'free-quota', status: 'warn', message: expect.stringMatching(/takes 50 more unpaid requests, more than --free-requests 25/) })]);
+      expect(counter.requests).toBe(1);
+      // Raised, it gets there (49 free answers left: the first run used one).
+      const raised = await checkSeller({ url, freeRequests: 60, facilitators: ['http://127.0.0.1:9'], timeoutMs: 1000 });
+      expect(raised.freeQuota).toMatchObject({ served: 49, exhausted: true });
+      expect(counter.requests).toBe(53);
+      expect(statusOf(raised, 'status')).toBe('pass');
+    });
+
+    it('stops at --free-requests when the headers never run out, and warns', async () => {
+      const { url, counter } = await quotaSeller(1000, () => ({ 'RateLimit-Remaining': '1' }));
+      const report = await checkSeller({ url, freeRequests: 5 });
+      expect(report.ok).toBe(true);
+      expect(report.checks.find((c) => c.id === 'free-quota')).toMatchObject({ status: 'warn', message: expect.stringMatching(/still served after 6 unpaid requests \(--free-requests 5\)/) });
+      expect(counter.requests).toBe(6);
+    });
+  });
+
+  describe('every route of a pricing.md', () => {
+    const pricing = (base: string) => [
+      '# Acme pricing',
+      '',
+      '## Chain \\*data\\*',
+      '',
+      `- Base URL: ${base}`,
+      '- Payment: x402, SBC on Radius testnet',
+      '',
+      '### Wallet history',
+      '',
+      '- Request: `GET /wallet/:address`',
+      '- Price: $0.001 / request',
+      '- Free: 2 requests per minute per IP',
+      '',
+      '### Transaction',
+      '',
+      '- Request: `GET /tx/:transfer_type/:hash`',
+      '- Price: $0.002 / request',
+      '',
+      '### Value types',
+      '',
+      '- Request: `GET /value/:id`',
+      '- Price: $0.001 / request',
+      '',
+    ].join('\n');
+
+    it('checks each route against its own price, skips unfilled parameters and totals the results', async () => {
+      const fac = await facilitator(radiusKinds);
+      // The seller charges 0.001 SBC everywhere, so the Transaction route (listed at $0.002) fails.
+      let walletRequests = 0;
+      const base = await seller({ facilitator: { url: fac.url }, routes: { 'GET /wallet/*': { price: '$0.001' }, 'GET /tx/*': { price: '$0.001' }, 'GET /value/*': { price: '$0.001' } } }, (res) => {
+        if (res.status === 402 && new URL(JSON.parse(Buffer.from(res.headers.get('payment-required')!, 'base64').toString()).resource.url).pathname.startsWith('/wallet/') && ++walletRequests <= 2) {
+          return Response.json({ free: true }, { headers: { 'RateLimit-Limit': '2', 'RateLimit-Remaining': String(2 - walletRequests), 'RateLimit-Reset': '60' } });
+        }
+        return res;
+      });
+      const routes = parsePricingMd(pricing('[Base URL]'));
+      const seen: string[] = [];
+      const result = await checkRoutes('pricing.md', routes, { address: '0xabc', hash: '0x01', transfer_type: 'radius' }, base, { facilitators: [fac.url] }, (r) => seen.push(r.path));
+      expect(seen).toEqual(['/wallet/:address', '/tx/:transfer_type/:hash', '/value/:id']);
+      expect(result.ok).toBe(false);
+      expect(result.summary.routes).toEqual({ checked: 2, passed: 1, failed: 1, skipped: 1 });
+      const [wallet, tx, value] = result.routes;
+      expect(wallet).toMatchObject({ catalog: 'Chain *data*', name: 'Wallet history', method: 'GET', price: '$0.001', free: '2 requests per minute per IP', url: `${base}/wallet/0xabc` });
+      expect(wallet!.report).toMatchObject({ ok: true, freeQuota: { limit: 2, served: 2, exhausted: true } });
+      expect(tx!.url).toBe(`${base}/tx/radius/0x01`);
+      expect(tx!.report!.checks.find((c) => c.id === 'offer[0].amount')).toMatchObject({ status: 'fail', message: expect.stringMatching(/expected \$0.002/) });
+      expect(value).toMatchObject({ skipped: "no value for :id; pass --param 'id=…'" });
+      expect(value!.report).toBeUndefined();
+      expect(result.summary.checks.fail).toBe(1);
+    });
+
+    it('skips every route without a base URL, and is not ok when nothing was checked', async () => {
+      const result = await checkRoutes('pricing.md', parsePricingMd(pricing('[Base URL]')), {}, undefined, {});
+      expect(result.ok).toBe(false);
+      expect(result.summary.routes).toEqual({ checked: 0, passed: 0, failed: 0, skipped: 3 });
+      expect(result.routes[0]!.skipped).toMatch(/has no Base URL; pass --base-url/);
+    });
   });
 
   it('fails a challenge bound to another resource or paying a zero address', async () => {
@@ -182,7 +340,7 @@ describe('radius-cli sell check', () => {
 
   it('warns when an unpaid HEAD is served', async () => {
     const fac = await facilitator(radiusKinds);
-    const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } }, undefined, true)}/api/report`, facilitators: [fac.url], probeHead: true });
+    const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } }, undefined, (req) => (req.method === 'HEAD' ? Response.json({}) : undefined))}/api/report`, facilitators: [fac.url], probeHead: true });
     expect(statusOf(report, 'head')).toBe('warn');
     expect(report.ok).toBe(true);
   });
@@ -340,4 +498,236 @@ describe('radius-cli sell check', () => {
     });
   });
 
+
+  describe('malformed credentials', () => {
+    const malformedSeller = async (answer: (req: Request) => Response | undefined) => {
+      const fac = await facilitator(radiusKinds);
+      const url = `${await seller({ facilitator: { url: fac.url }, mpp: { secretKey: MPP_SECRET } }, undefined, (req) => (req.headers.has('payment-signature') || /^payment /i.test(req.headers.get('authorization') ?? '') ? answer(req) : undefined))}/api/report`;
+      return { fac, url };
+    };
+
+    it('passes a radius-sdk seller: a malformed PAYMENT-SIGNATURE or Payment credential gets a 402 with a fresh challenge', async () => {
+      const { fac, url } = await malformedSeller(() => undefined);
+      const report = await checkSeller({ url, facilitators: [fac.url] });
+      expect(report.checks.find((c) => c.id === 'credentials.x402')).toMatchObject({ status: 'pass', message: expect.stringMatching(/malformed PAYMENT-SIGNATURE credential answers 402 with a fresh challenge/) });
+      expect(report.checks.find((c) => c.id === 'credentials.mpp')).toMatchObject({ status: 'pass', message: expect.stringMatching(/Authorization: Payment credential answers 402 with a fresh challenge/) });
+      expect(report.score).toBe(100);
+      expect(fac.settles).toBe(0);
+    });
+
+    it('fails a seller that crashes on a malformed credential, without blocking', async () => {
+      const { fac, url } = await malformedSeller(() => new Response('boom', { status: 500 }));
+      const report = await checkSeller({ url, facilitators: [fac.url] });
+      const x402 = report.checks.find((c) => c.id === 'credentials.x402')!;
+      expect(x402).toMatchObject({ status: 'fail', deduction: 15, message: expect.stringMatching(/answered 500: a bad credential crashes the seller/) });
+      expect(report.ok).toBe(false);
+      // Both protocols crash: 100 - 15 - 15.
+      expect(report.score).toBe(70);
+    });
+
+    it('fails a seller that serves the route to a malformed credential as blocking', async () => {
+      const { fac, url } = await malformedSeller(() => Response.json({ report: 'free' }));
+      const report = await checkSeller({ url, facilitators: [fac.url] });
+      expect(report.checks.find((c) => c.id === 'credentials.x402')).toMatchObject({ status: 'fail', blocking: true, deduction: 40, message: expect.stringMatching(/served without a valid payment/) });
+      expect(report.score).toBe(20);
+    });
+
+    it('warns on a 400, and can be turned off', async () => {
+      const { fac, url } = await malformedSeller(() => Response.json({ error: 'bad header' }, { status: 400 }));
+      const report = await checkSeller({ url, facilitators: [fac.url] });
+      expect(statusOf(report, 'credentials.x402')).toBe('warn');
+      expect(report.score).toBe(90);
+      const off = await checkSeller({ url, facilitators: [fac.url], probeMalformed: false });
+      expect(statusOf(off, 'credentials.x402')).toBeUndefined();
+    });
+  });
+
+  describe('OpenAPI discovery', () => {
+    const operation = (extra: Record<string, unknown> = {}) => ({ get: { summary: 'Report', responses: { '200': { description: 'ok' }, '402': { description: 'Payment Required' } }, ...extra } });
+    const docSeller = async (doc: unknown, served = { count: 0 }) => {
+      const fac = await facilitator(radiusKinds);
+      const base = await seller({ facilitator: { url: fac.url }, mpp: { secretKey: MPP_SECRET } }, undefined, (req) => {
+        if (new URL(req.url).pathname !== '/openapi.json') return undefined;
+        served.count++;
+        return Response.json(doc);
+      });
+      return { fac, base, served };
+    };
+    const discovery = (report: SellCheckReport) => report.checks.filter((c) => c.id.startsWith('discovery.')).map((c) => [c.id, c.status]);
+
+    it('reports a missing /openapi.json as information', async () => {
+      const fac = await facilitator(radiusKinds);
+      const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } })}/api/report`, facilitators: [fac.url] });
+      expect(report.checks.find((c) => c.id === 'discovery.openapi')).toMatchObject({ status: 'info', message: expect.stringMatching(/no OpenAPI document at http:\/\/127\.0\.0\.1:\d+\/openapi\.json \(answered 404\)/) });
+      expect(report.score).toBe(100);
+      const skipped = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } })}/api/report`, facilitators: [fac.url], openapi: false });
+      expect(discovery(skipped)).toEqual([]);
+    });
+
+    /** An operation with no 402 response, so only its x-radius-* or x-payment-info extensions say it is paid. */
+    const unpriced = (extra: Record<string, unknown> = {}) => ({ get: { summary: 'Report', responses: { '200': { description: 'ok' } }, ...extra } });
+    const message = (report: SellCheckReport, id: string) => report.checks.find((c) => c.id === id)?.message;
+
+    it('passes a route whose x-radius-price agrees with the 402, compared in USD with the asset decimals', async () => {
+      const { fac, base } = await docSeller({ openapi: '3.1.0', info: { title: 't', version: '1' }, paths: { '/api/report': unpriced({ 'x-radius-price': '0.001' }) } });
+      const report = await checkSeller({ url: `${base}/api/report`, facilitators: [fac.url] });
+      expect(discovery(report)).toEqual([['discovery.route', 'pass'], ['discovery.price', 'pass']]);
+      expect(message(report, 'discovery.price')).toMatch(/x-radius-price 0\.001 USD matches the 402/);
+      expect(report.score).toBe(100);
+    });
+
+    it('passes a documented 402 response, with templates and server prefixes', async () => {
+      const { fac, base } = await docSeller({ openapi: '3.0.3', servers: [{ url: '/api' }], paths: { '/{name}': operation() } });
+      const report = await checkSeller({ url: `${base}/api/report`, facilitators: [fac.url] });
+      expect(discovery(report)).toEqual([['discovery.route', 'pass'], ['discovery.price', 'pass']]);
+      expect(message(report, 'discovery.route')).toMatch(/lists GET \/\{name\}/);
+      expect(message(report, 'discovery.price')).toMatch(/documents a 402 response \(priced at the project default price/);
+    });
+
+    it('reads x-payment-info as a fallback when present: { amount, currency: USD } and atomic prices', async () => {
+      const { fac, base } = await docSeller({ openapi: '3.1.0', paths: { '/api/report': unpriced({ 'x-payment-info': { protocols: ['x402', 'mpp'], price: { amount: '0.001', currency: 'USD' } } }) } });
+      const report = await checkSeller({ url: `${base}/api/report`, facilitators: [fac.url] });
+      expect(statusOf(report, 'discovery.price')).toBe('pass');
+      expect(message(report, 'discovery.price')).toMatch(/x-payment-info agrees with the 402; the Radius Platform does not read x-payment-info/);
+      const atomic = await checkSeller({ url: `${base}/api/report`, facilitators: [fac.url], openapi: { source: 'openapi.json', document: { openapi: '3.1.0', paths: { '/api/report': unpriced({ 'x-payment-info': { amount: '1000', currency: TESTNET.asset.address } }) } } } });
+      expect(statusOf(atomic, 'discovery.price')).toBe('pass');
+      // Alongside x-radius-price, it is still compared.
+      const both = await checkSeller({ url: `${base}/api/report`, facilitators: [fac.url], openapi: { source: 'openapi.json', document: { openapi: '3.1.0', paths: { '/api/report': unpriced({ 'x-radius-price': '0.001', 'x-payment-info': { price: '$0.002' } }) } } } });
+      expect(message(both, 'discovery.price')).toMatch(/its x-payment-info price \$0\.002 matches no x402 offer/);
+    });
+
+    it('warns when the route or its operation is missing, it is documented as free, or its price disagrees with the 402', async () => {
+      const cases: [unknown, string, RegExp][] = [
+        [{ openapi: '3.1.0', paths: { '/other': operation() } }, 'discovery.route', /lists no path for \/api\/report/],
+        [{ openapi: '3.1.0', paths: { '/api/report': { post: {} } } }, 'discovery.route', /no GET operation/],
+        [{ openapi: '3.1.0', paths: { '/api/report': unpriced() } }, 'discovery.price', /neither x-radius-price nor a documented 402 response, so OpenAPI readers such as the Radius Platform treat it as free/],
+        [{ openapi: '3.1.0', paths: { '/api/report': unpriced({ 'x-radius-price': '0.002' }) } }, 'discovery.price', /its x-radius-price 0\.002 USD matches no x402 offer/],
+        [{ openapi: '3.1.0', paths: { '/api/report': unpriced({ 'x-radius-price': '$0.001' }) } }, 'discovery.price', /x-radius-price "\$0\.001" is not a decimal USD string/],
+        [{ openapi: '3.1.0', paths: { '/api/report': operation({ 'x-radius-free': true }) } }, 'discovery.price', /marked x-radius-free, but the route answers 402/],
+        [{ openapi: '3.1.0', paths: { '/api/report': operation({ 'x-payment-info': { protocols: ['x402'], price: '$0.002' } }) } }, 'discovery.price', /the 402 offers MPP; its x-payment-info price \$0\.002 matches no x402 offer/],
+        [{ title: 'not openapi' }, 'discovery.openapi', /is not an OpenAPI document/],
+      ];
+      for (const [doc, id, message] of cases) {
+        const { fac, base } = await docSeller(doc);
+        const report = await checkSeller({ url: `${base}/api/report`, facilitators: [fac.url] });
+        expect(report.checks.find((c) => c.id === id), id).toMatchObject({ status: 'warn', deduction: 5, message: expect.stringMatching(message) });
+        expect(report.ok).toBe(true);
+      }
+    });
+
+    it('warns when an --openapi URL cannot be read, and reads one document for every route', async () => {
+      const fac = await facilitator(radiusKinds);
+      const report = await checkSeller({ url: `${await seller({ facilitator: { url: fac.url } })}/api/report`, facilitators: [fac.url], openapi: 'http://127.0.0.1:9/openapi.json', timeoutMs: 1000 });
+      expect(statusOf(report, 'discovery.openapi')).toBe('warn');
+      const { base, served } = await docSeller({ openapi: '3.1.0', paths: { '/api/report': operation({ 'x-payment-info': {} }) } });
+      const routes = parsePricingMd(`## Reports\n- Base URL: ${base}\n### One\n- Request: \`GET /api/report\`\n- Price: $0.001 / request\n### Two\n- Request: \`GET /api/report\`\n- Price: $0.001 / request\n`);
+      const result = await checkRoutes('pricing.md', routes, {}, undefined, { facilitators: [fac.url], openapiCache: new Map() });
+      expect(served.count).toBe(1);
+      expect(result.score).toBe(100);
+    });
+  });
+
+  describe('the command: --min-score, CI and GitHub Actions', () => {
+    // The command sets process.exitCode rather than calling process.exit(), so piped stdout drains.
+    // CI markers are cleared unless a test sets them, so the suite behaves the same on a laptop and in CI.
+    async function cli(env: Record<string, string | undefined>, ...args: string[]) {
+      const program = new Command().option('--network <name>').option('--rpc-url <url>').option('--private-key <hex>').option('--password-file <path>').option('--sbc <address>').option('--rusd <address>').option('--json');
+      registerSell(program);
+      let stdout = '';
+      let stderr = '';
+      for (const [k, v] of Object.entries({ CI: undefined, GITHUB_ACTIONS: undefined, GITHUB_STEP_SUMMARY: undefined, ...env })) vi.stubEnv(k, v);
+      const out = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { stdout += String(chunk); return true; });
+      const err = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { stderr += String(chunk); return true; });
+      const log = vi.spyOn(console, 'log').mockImplementation((s: unknown) => { stdout += `${String(s)}\n`; });
+      process.exitCode = undefined;
+      try {
+        await program.parseAsync(['node', 'radius-cli', ...args]);
+        if (process.exitCode === undefined) throw new Error('sell check did not set an exit code');
+        return { code: Number(process.exitCode), stdout, stderr };
+      } finally {
+        process.exitCode = undefined;
+        out.mockRestore(); err.mockRestore(); log.mockRestore();
+        vi.unstubAllEnvs();
+      }
+    }
+    /** A seller that answers a malformed credential with `status` (500: one non-blocking failure, score 85; 200: one blocking failure, score 60). */
+    const answering = async (status: number) => {
+      const fac = await facilitator(radiusKinds);
+      const url = `${await seller({ facilitator: { url: fac.url } }, undefined, (req) => (req.headers.has('payment-signature') ? new Response('body', { status }) : undefined))}/api/report`;
+      return { fac, url };
+    };
+
+    it('prints the score and a per-check table, and --min-score sets the exit code', async () => {
+      const { fac, url } = await answering(500);
+      const plain = await cli({}, 'sell', 'check', url, '--facilitator', fac.url);
+      expect(plain.code).toBe(1);
+      expect(plain.stdout).toMatch(/ {2}FAIL {2}-15 {2}credentials\.x402: /);
+      expect(plain.stdout).toMatch(/ {2}ok {9}status: /);
+      expect(plain.stdout).toMatch(/^score: 85\/100$/m);
+      expect(plain.stdout).not.toMatch(/::error/);
+      const above = await cli({}, 'sell', 'check', url, '--facilitator', fac.url, '--min-score', '80');
+      expect(above.code).toBe(0);
+      expect(above.stdout).toMatch(/^score: 85\/100 \(minimum 80: passed\)$/m);
+      const below = await cli({}, 'sell', 'check', url, '--facilitator', fac.url, '--min-score', '90');
+      expect(below.code).toBe(1);
+      expect(below.stdout).toMatch(/^score: 85\/100 \(minimum 90: FAILED\)$/m);
+    });
+
+    it('--min-score fails a run with a blocking failure, whatever the score', async () => {
+      const { fac, url } = await answering(200);
+      const run = await cli({}, 'sell', 'check', url, '--facilitator', fac.url, '--min-score', '50');
+      expect(run.stdout).toMatch(/ {2}FAIL {2}-40 {2}credentials\.x402: .*served without a valid payment/);
+      expect(run.stdout).toMatch(/^score: 60\/100 \(minimum 50: FAILED, 1 blocking failure\)$/m);
+      expect(run.code).toBe(1);
+      const zero = await cli({}, 'sell', 'check', url, '--facilitator', fac.url, '--min-score', '0');
+      expect(zero.code).toBe(1);
+    });
+
+    it('--min-score fails a run that never reached the 402 (a free quota not used up), whatever the minimum', async () => {
+      // Every unpaid request is served 200 with RateLimit headers: a free quota too large to use up.
+      const fac = await facilitator(radiusKinds);
+      const base = await seller({ facilitator: { url: fac.url } }, () => Response.json({ free: true }, { headers: { 'RateLimit-Limit': '1000', 'RateLimit-Remaining': '999', 'RateLimit-Reset': '60' } }));
+      const url = `${base}/api/report`;
+      const summary = join(mkdtempSync(join(tmpdir(), 'sell-check-')), 'summary.md');
+      writeFileSync(summary, '');
+      const fifty = await cli({ GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary }, 'sell', 'check', url, '--facilitator', fac.url, '--min-score', '50');
+      expect(fifty.stdout).toMatch(/ {2}warn {2} -5 {2}free-quota: .*so the 402 was not checked/);
+      expect(fifty.stdout).toMatch(/^score: 50\/100 \(minimum 50: FAILED, 402 not reached \(free quota not used up\)\)$/m);
+      expect(fifty.code).toBe(1);
+      expect(readFileSync(summary, 'utf8')).toMatch(/### radius-cli sell check: 50\/100 \(minimum 50: failed, 402 not reached \(free quota not used up\)\)/);
+      const zero = await cli({}, 'sell', 'check', url, '--facilitator', fac.url, '--min-score', '0');
+      expect(zero.code).toBe(1);
+      // With --free-requests 0 the quota is only information, and the run still fails the gate.
+      const info = await cli({}, 'sell', 'check', url, '--free-requests', '0', '--min-score', '0');
+      expect(info.stdout).toMatch(/^score: 50\/100 \(minimum 0: FAILED, 402 not reached \(free quota not used up\)\)$/m);
+      expect(info.code).toBe(1);
+      // Without --min-score the exit code is unchanged: no check failed.
+      expect((await cli({}, 'sell', 'check', url, '--facilitator', fac.url)).code).toBe(0);
+      // Every route of a pricing.md: the route that stopped at the free quota fails the gate too.
+      const pricing = join(mkdtempSync(join(tmpdir(), 'sell-check-')), 'pricing.md');
+      writeFileSync(pricing, `## Reports\n- Base URL: ${base}\n### Report\n- Request: \`GET /api/report\`\n- Price: $0.001 / request\n`);
+      const routes = await cli({}, 'sell', 'check', '--pricing', pricing, '--facilitator', fac.url, '--min-score', '0');
+      expect(routes.stdout).toMatch(/^score: 50\/100 \(minimum 0: FAILED, 402 not reached \(free quota not used up\)\) \(the lowest route score\)$/m);
+      expect(routes.code).toBe(1);
+    });
+
+    it('on GitHub Actions emits annotations and a step summary; --json keeps stdout JSON; CI alone prints none', async () => {
+      const { fac, url } = await answering(500);
+      const summary = join(mkdtempSync(join(tmpdir(), 'sell-check-')), 'summary.md');
+      writeFileSync(summary, '');
+      const env = { CI: 'true', GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary };
+      const run = await cli(env, 'sell', 'check', url, '--facilitator', fac.url, '--min-score', '80');
+      expect(run.code).toBe(0);
+      expect(run.stdout).toMatch(new RegExp(`^::error title=sell check credentials\\.x402%3A GET ${url.replace(/[.:/]/g, (c) => (c === ':' ? '%3A' : `\\${c}`))}::an unpaid GET with a malformed PAYMENT-SIGNATURE credential answered 500`, 'm'));
+      expect(readFileSync(summary, 'utf8')).toMatch(/### radius-cli sell check: 85\/100 \(minimum 80: passed\)[\s\S]*\| fail \| -15 \| credentials\.x402 \|/);
+      const json = await cli(env, '--json', 'sell', 'check', url, '--facilitator', fac.url);
+      expect(JSON.parse(json.stdout)).toMatchObject({ score: 85, checks: expect.arrayContaining([expect.objectContaining({ id: 'credentials.x402', status: 'fail', deduction: 15 })]) });
+      expect(json.stderr).toMatch(/^::error /m);
+      // CI without GITHUB_ACTIONS: plain output, no workflow commands, no summary.
+      writeFileSync(summary, '');
+      const ci = await cli({ CI: 'true', GITHUB_STEP_SUMMARY: summary }, 'sell', 'check', url, '--facilitator', fac.url);
+      expect(ci.stdout).not.toMatch(/::error/);
+      expect(readFileSync(summary, 'utf8')).toBe('');
+    });
+  });
 });
