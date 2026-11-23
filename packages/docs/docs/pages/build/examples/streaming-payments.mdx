@@ -1,13 +1,13 @@
 ---
 title: Streaming Payments
-description: Implement streaming payments on Radius for compute, bandwidth, APIs, or content by settling a payment for each interval of use.
+description: Bill for ongoing use of compute, bandwidth, APIs, or content on Radius by charging one paid request per interval with radius-sdk. Radius has no session or payment-channel primitive; the application runs the loop.
 ---
 
 import { TESTNET_RPC_URL, TESTNET_CHAIN_ID, NATIVE_TOKEN, FAUCET_DASHBOARD_PATH, TESTNET_DASHBOARD_URL, STABLECOIN } from '../../../constants';
 
-# Streaming Payments [Enable continuous, per-second billing for compute, bandwidth, and content delivery.]
+# Streaming Payments [Bill for ongoing use with one paid request per interval]
 
-Use streaming payments on Radius to charge continuously based on real usage, settling a payment for each interval of use.
+Charge for continuous use, such as compute time, bandwidth, or a long-running job, by billing it in short intervals. With `radius-sdk`, each interval is one ordinary paid request that settles on Radius.
 
 ## Problem statement
 
@@ -17,68 +17,119 @@ Traditional billing models create friction for both service providers and consum
 - **Invoice-based delays**: Providers wait days or weeks to get paid, exposing themselves to default risk
 - **Coarse billing granularity**: Services charge by month or hour, forcing users to pay for unused capacity
 
-A service can use **regular micropayments** to bill in small increments, down to seconds of usage. The application chooses the interval and what happens when a payment or delivery fails. Shorter intervals reduce the amount outstanding between payments.
+A service can bill in small increments with **regular micropayments**. The application chooses the interval and what happens when a payment or delivery fails. Shorter intervals reduce the amount outstanding between payments, at the cost of one paid request and one settlement per interval.
 
 ## How it works
 
-Streaming payments establish an ongoing payment loop between client and server:
+`radius-sdk` has no session, stream, or payment-channel primitive. It charges for HTTP requests, one payment per request. A streaming payment is a loop your application runs on top of that:
 
-1. **Client starts a session** with the server and a wallet that can pay
-2. **Payments flow at regular intervals** (every second, every minute) based on service consumption
-3. **Service continues uninterrupted** as long as payments arrive on schedule
-4. **Either party can terminate** anytime—the client stops payments, or the server stops service
+1. **The server prices a usage route.** It charges for a route such as `POST /sessions/*/usage` with [`radiusPayments`](/reference/radius-sdk#radiuspayments), at a fixed price per interval. Your handler records that the session is paid for one more interval.
+2. **The client calls the route once per interval.** It uses [`createRadiusFetch`](/build/make-payments). Each call is a separate x402 payment: the server answers `402`, the client signs, retries, and the payment settles before the handler runs.
+3. **The client caps what it pays.** `maxPerRequest` refuses any interval priced above the cap, and a running total in `onPaymentRequired` stops the loop at a budget. The SDK keeps no total of its own.
+4. **Either side stops.** The client stops calling the route. The server stops serving when a session has no paid interval, which your code checks; the SDK does not track sessions or intervals.
 
-The application enforces the stop: the server pauses service when an interval goes unpaid, and the client stops paying when it stops using the service.
+The service itself, for example a VM, a data feed, or a model stream, runs outside the payment. Your code ties the two together, such as by keying usage to a session ID.
 
-With [`radius-sdk`](/reference/radius-sdk), each interval can be one paid request. The server prices a route such as `POST /sessions/*/usage` with `radiusPayments`, and the client calls it every interval with [`createRadiusFetch`](/build/make-payments). `maxPerRequest` caps each step, and a total budget in `onPaymentRequired` caps the session. Each step settles on Radius. For many very small increments, a payment channel such as [`radius-stream-channel`](https://github.com/radius-workshop/radius-stream-channel) settles less often.
+The seller prices one interval and records it:
+
+```typescript
+import { radiusPayments } from 'radius-sdk/server';
+
+const pay = radiusPayments({
+  network: 'testnet',
+  payTo: '0xYourWalletAddress',
+  routes: {
+    'POST /sessions/*/usage': { price: '0.001 SBC', description: 'One minute of service' },
+  },
+});
+
+export default {
+  fetch: pay.wrap(async (request, payment) => {
+    const match = new URL(request.url).pathname.match(/^\/sessions\/([^/]+)\/usage$/);
+    if (request.method !== 'POST' || !match) return new Response('Not found', { status: 404 });
+    // Your code: extend this session's paid-until time by one interval.
+    return Response.json({ session: match[1], paidBy: payment?.payer });
+  }),
+};
+```
+
+The buyer pays once per interval, within a total budget:
+
+```typescript
+import { createRadiusFetch } from 'radius-sdk/client';
+
+const budget = 60_000n; // 0.06 SBC in base units: 60 intervals at 0.001 SBC
+let committed = 0n;
+
+const payFetch = createRadiusFetch({
+  network: 'testnet',
+  signer: process.env.RADIUS_PRIVATE_KEY as `0x${string}`,
+  maxPerRequest: '0.001 SBC',
+  onPaymentRequired: (offer) => {
+    if (committed + BigInt(offer.amount) > budget) return false;
+    committed += BigInt(offer.amount);
+    return true;
+  },
+});
+
+for (let minute = 0; minute < 60; minute++) {
+  const response = await payFetch('https://{{SELLER_HOST}}/sessions/abc123/usage', { method: 'POST' });
+  if (!response.ok) break;
+  await new Promise((resolve) => setTimeout(resolve, 60_000));
+}
+```
+
+When the budget is spent, `onPaymentRequired` returns `false` and the call throws a `RadiusPaymentError` with the code `declined`.
+
+A single paid response can also stream, such as server-sent events or model output: one payment covers the whole response. See [stream a paid response](/build/accept-payments#stream-a-paid-response). Charging per chunk or per message is not supported; see [supported schemes and transports](/reference/payments).
 
 ## Benefits
 
-Streaming payments unlock several key advantages:
+Billing per interval gives both sides these properties, when the application enforces them:
 
-| Benefit               | Impact                                            |
-| --------------------- | ------------------------------------------------- |
-| **No overpayment**    | Pay only for what you consume, down to the second |
-| **Low credit risk**   | At most one interval of service is ever unpaid    |
-| **Granular billing**  | Per-second pricing enables precise cost-matching  |
-| **Fast termination**  | The server stops at the next unpaid interval      |
-| **Predictable costs** | Linear per-unit pricing with no hidden fees       |
-| **Improved UX**       | Users pay gradually instead of upfront            |
+| Benefit                 | Impact                                                                        |
+| ----------------------- | ----------------------------------------------------------------------------- |
+| **No prepayment**       | The buyer pays as it uses the service, one interval at a time                 |
+| **Bounded credit risk** | If the server serves only paid intervals, at most one interval is outstanding |
+| **Your billing unit**   | The server chooses the interval length and the price of each interval         |
+| **Fast termination**    | The server stops at the next unpaid interval; the client stops by not calling |
+| **Buyer-side caps**     | `maxPerRequest` caps each interval and `onPaymentRequired` caps the total     |
+| **Improved UX**         | Users pay gradually instead of upfront                                        |
 
 ## Use cases
 
-Streaming payments are ideal for:
+Interval billing fits services whose cost grows with time or volume:
 
 ### Cloud compute
 
-**Pay-per-second VMs and container instances**
+**Pay-per-minute VMs and container instances**
 
 - Traditional: Monthly subscriptions for over-provisioned capacity
-- Streaming: Micro-VM charges by the second, scale up/down instantly
-- Example: 0.01 USD per second per vCPU
+- Per interval: The client pays for each minute it keeps an instance running
+- Example: 0.01 USD per vCPU-minute
 
-### Video/content streaming
+### Video and content delivery
 
-**Pay-per-minute or per-gigabyte**
+**Pay per segment or per block of data**
 
 - Traditional: Tiered monthly plans with bandwidth caps
-- Streaming: Continuous payment as bytes flow, no caps or surprises
+- Per interval: The client pays for each segment or block before fetching it
 - Example: 0.01 USD per MB of video data
 
-### WiFi and network access
+### Wi-Fi and network access
 
 **Pay-per-minute connectivity**
 
 - Traditional: 24-hour passes or monthly contracts
-- Streaming: Micropayments per minute of active connection
+- Per interval: The client pays for each minute of connection
 - Example: 0.01 USD per minute of active connection
 
 ### AI inference and APIs
 
-**Pay-per-token or per-request**
+**Pay per request or per batch of tokens**
 
 - Traditional: Throttled APIs with prepaid tokens
-- Streaming: Continuous settlement as tokens are generated
+- Per interval: Each request is paid, or a long job is paid per batch of tokens through a usage route
 - Example: 0.01 USD per 1,000 tokens generated
 
 ## Network configuration
@@ -91,12 +142,14 @@ Streaming payments are ideal for:
 - Block numbers are millisecond timestamps; see [Ethereum compatibility](/reference/ethereum-compatibility)
 
 :::info
-Testnet is perfect for experimenting with streaming payment patterns. Fund a testnet wallet with {STABLECOIN} from the <a href={`${TESTNET_DASHBOARD_URL}${FAUCET_DASHBOARD_PATH}`}>Radius Testnet Faucet</a>.
+Testnet is the place to experiment with interval billing. Fund a testnet wallet with {STABLECOIN} from the <a href={`${TESTNET_DASHBOARD_URL}${FAUCET_DASHBOARD_PATH}`}>Radius Testnet Faucet</a>.
 :::
 
 ## Related workshop projects
 
-- [`radius-stream-channel`](https://github.com/radius-workshop/radius-stream-channel) — EIP-712 payment channels with cumulative vouchers
+These are separate experiments, not part of `radius-sdk`:
+
+- [`radius-stream-channel`](https://github.com/radius-workshop/radius-stream-channel) — a Solidity payment-channel contract with EIP-712 cumulative vouchers. It settles less often for many very small increments, but `radius-sdk` and `radius-cli` do not integrate with it
 - [`rad-router-proxy`](https://github.com/radius-workshop/rad-router-proxy) — AI IDE proxy that supports streaming model responses while handling x402 payments
 - [Example projects](/build/examples/workshop-playground) — Runnable radius-sdk examples
 
@@ -104,6 +157,7 @@ Testnet is perfect for experimenting with streaming payment patterns. Fund a tes
 
 Learn more about building on Radius:
 
+- **[Supported schemes and transports](/reference/payments)** — What radius-sdk and radius-cli support today
 - **[Tutorial: sell a data lookup](/build/tutorials/sell-data)** — Charge per request with radius-sdk
 - **[Agent payments](/build/examples/agent-payments)** — Build payable agent workflows
 
