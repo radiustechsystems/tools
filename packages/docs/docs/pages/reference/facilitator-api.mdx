@@ -446,7 +446,7 @@ The Radius facilitator also settles on Tempo, in OpenUSD (OUSD; not Origin Dolla
 | EIP-712 domain version | `1`                                          | `1`                                          |
 | Transfer methods       | `permit2`                                    | `permit2`                                    |
 
-Stock x402 clients pay on Tempo without any Radius code: `@x402/fetch` with `@x402/evm` (2.29 or later) and a plain viem account signs the Permit2 authorization and the sponsored permit from the `extra` fields of the requirement, so the first payment from a fresh wallet needs no approval transaction. One setting is required: OUSD is not in the client's built-in asset table, and its spend controls refuse tokens that are not listed there, so add it to `allowedAssets` (the same applies to SBC on Radius mainnet):
+Stock x402 clients pay on Tempo without any Radius code: `@x402/fetch` with `@x402/evm` (2.29 or later) and a plain viem account signs the Permit2 authorization and the sponsored permit from the `extra` fields of the requirement, so the first payment from a fresh wallet needs no approval transaction. One setting is required: OUSD is not in the client's built-in asset table, and its spend controls refuse tokens that are not listed there, so add it to `allowedAssets` (SBC on Radius mainnet and testnet is in the table already):
 
 ```typescript
 import { wrapFetchWithPayment, x402Client } from '@x402/fetch';
