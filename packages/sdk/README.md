@@ -463,6 +463,8 @@ tokens are reported in `tokens` but not valued 1:1 in `total`.
 | `'testnet'` / `'radius-testnet'`   | Radius Test Network, 72344 | SBC   | facilitator.testnet.radiustech.xyz |
 | `'base'`                           | Base, 8453                 | USDC  | facilitator.radiustech.xyz         |
 | `'base-sepolia'`                   | Base Sepolia, 84532        | USDC  | facilitator.testnet.radiustech.xyz |
+| `'tempo'`                          | Tempo, 4217                | OUSD  | facilitator.radiustech.xyz         |
+| `'tempo-moderato'`                 | Tempo Moderato, 42431      | OUSD  | facilitator.testnet.radiustech.xyz |
 
 <!-- networks:end -->
 

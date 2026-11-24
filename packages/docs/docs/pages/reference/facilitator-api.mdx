@@ -434,15 +434,54 @@ A `502` means the facilitator failed or could not be reached. It does not mean t
 
 Raw token units use 6 decimals. A `value` of `"100"` equals 0.0001 SBC. A `value` of `"1000000"` equals 1 SBC.
 
+The Radius facilitator also settles on Tempo, in OpenUSD (OUSD; not Origin Dollar, which uses the same symbol on Ethereum). Tempo's tokens have EIP-2612 `permit` but no EIP-3009, so payments there are Permit2 with the `eip2612GasSponsoring` extension, and a paying agent needs only OUSD: no gas token and no approval transaction.
+
+| Property               | Tempo                                        | Tempo Moderato (testnet)                     |
+| ---------------------- | -------------------------------------------- | -------------------------------------------- |
+| Chain ID               | `4217`                                       | `42431`                                      |
+| CAIP-2                 | `eip155:4217`                                | `eip155:42431`                               |
+| OpenUSD (OUSD) token   | `0x20c0000000000000000000006a37da5c996874be` | `0x20c0000000000000000000006a37da5c996874be` |
+| OUSD decimals          | 6                                            | 6                                            |
+| EIP-712 domain name    | `OpenUSD`                                    | `OpenUSD`                                    |
+| EIP-712 domain version | `1`                                          | `1`                                          |
+| Transfer methods       | `permit2`                                    | `permit2`                                    |
+
+Stock x402 clients pay on Tempo without any Radius code: `@x402/fetch` with `@x402/evm` (2.29 or later) and a plain viem account signs the Permit2 authorization and the sponsored permit from the `extra` fields of the requirement, so the first payment from a fresh wallet needs no approval transaction. One setting is required: OUSD is not in the client's built-in asset table, and its spend controls refuse tokens that are not listed there, so add it to `allowedAssets` (SBC on Radius mainnet and testnet is in the table already):
+
+```typescript
+import { wrapFetchWithPayment, x402Client } from '@x402/fetch';
+import { ExactEvmScheme, toClientEvmSigner } from '@x402/evm';
+
+const client = new x402Client().register('eip155:4217', new ExactEvmScheme(toClientEvmSigner(account, publicClient))).setSpendControls({
+  allowedAssets: [{ network: 'eip155:4217', asset: '0x20c0000000000000000000006a37da5c996874be' }],
+});
+const fetchWithPay = wrapFetchWithPayment(fetch, client);
+```
+
+OUSD is issued on Tempo by Open Standard through Bridge, and businesses mint and redeem it there or through partners such as BVNK; see [Tempo's announcement](https://tempo.xyz/blog/open-usd-ousd/). On Moderato, the `tempo_fundAddress` JSON-RPC method funds any address with test OUSD.
+
+## Held payments
+
+A Tempo account can give itself a receive policy (TIP-403) saying which tokens, or which senders, it accepts. A transfer such a policy rejects does not revert: the transaction succeeds, the token credits Tempo's ReceivePolicyGuard (`0xb10c000000000000000000000000000000000000`) instead of the recipient, and the recipient gets nothing.
+
+The facilitator guards against this twice:
+
+- `/verify` asks Tempo's policy registry whether the recipient can receive the token from the payer, and refuses the payment with `invalidReason` starting `Recipient can't receive` when not. The payment is never sent. The cause is the seller's wallet, so pay another entry in `accepts` if there is one, and tell the seller their Tempo address rejects OUSD.
+- If the policy changed between verify and settle, `/settle` answers `success: false` with `errorReason` `payment_held_by_receive_policy`, the transaction hash, and an `errorMessage` saying what happened.
+
+A held payment is held, not lost. The amount sits in the ReceivePolicyGuard under the recipient's address, and the payer (or the recipient's recovery authority) claims it back from the guard with Tempo's tooling. Do not retry the payment to the same recipient: it would be held again until they change their policy. If you need help recovering a held amount, contact Radius support with the transaction hash.
+
 ## Troubleshooting
 
-| Error                            | Cause                                                                               | Action                                                                                  |
-| -------------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `"No available wallets in pool"` | Facilitator settlement wallets temporarily exhausted                                | Retry after 1-2s; contact operator if persistent                                        |
-| HTTP `502`                       | Facilitator failed or unreachable                                                   | Check whether the payment settled before retrying                                       |
-| `EIP3009: authorization is used` | The authorization nonce was already settled or canceled                             | Check whether the first payment settled before signing a new one                        |
-| `EIP3009: invalid signature`     | The signature does not match the token's EIP-712 domain or the authorization fields | Sign with the `name` and `version` from the offer's `extra`, and the exact offer fields |
-| `"Permit expired"`               | Payment deadline (`validBefore`) passed                                             | Client re-signs with fresh deadline                                                     |
+| Error                            | Cause                                                                               | Action                                                                                       |
+| -------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `"No available wallets in pool"` | Facilitator settlement wallets temporarily exhausted                                | Retry after 1-2s; contact operator if persistent                                             |
+| HTTP `502`                       | Facilitator failed or unreachable                                                   | Check whether the payment settled before retrying                                            |
+| `EIP3009: authorization is used` | The authorization nonce was already settled or canceled                             | Check whether the first payment settled before signing a new one                             |
+| `EIP3009: invalid signature`     | The signature does not match the token's EIP-712 domain or the authorization fields | Sign with the `name` and `version` from the offer's `extra`, and the exact offer fields      |
+| `"Permit expired"`               | Payment deadline (`validBefore`) passed                                             | Client re-signs with fresh deadline                                                          |
+| `Recipient can't receive OUSD…`  | The seller's Tempo address has a receive policy that rejects the token or the payer | Pay another entry in `accepts`; tell the seller (see [Held payments](#held-payments))        |
+| `payment_held_by_receive_policy` | The transfer mined but the recipient's receive policy diverted it to the guard      | Don't retry the same recipient; reclaim from the guard (see [Held payments](#held-payments)) |
 
 See [x402 payments — Troubleshooting](/build/x402#troubleshooting) for details.
 
